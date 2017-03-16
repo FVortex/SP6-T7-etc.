@@ -1,0 +1,2808 @@
+---
+title: "T7_and_SP6.rmd"
+author: "Mikhail Orlov"
+output:
+     pdf_document:
+         latex_engine: xelatex
+header-includes: \usepackage[utf8x]{inputenc}
+---
+
+```{r}
+library(knitr)
+opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+```
+#SP6 bacteriophage promoters physical properties calculation (electrostatic potential and SIDD)
+
+Workspace is cleared and R libraries are loaded; current directory is set. It contains all that is needed for script's work and its output.
+
+```{r}
+rm(list = ls())
+setwd('/home/mikhail/Documents/t7/SP6_all_promoter_variants/')
+wd<-getwd()
+```
+
+Removing previous files for phages' SIDD profiles
+```{r}
+dir_t7 <- dir('/home/mikhail/Documents/t7/')
+unlink(paste0(
+              '/home/mikhail/Documents/t7/',
+               grep('*_sidd_*', dir_t7, value = T)))
+```
+
+#T7 bacteriophage promoters physical properties calculation (electrostatic potential and SIDD)
+
+R libraries are loaded; current directory is set. It contains all that is needed for script's work and its output.
+```{r message=FALSE}
+library(gtools)
+library(plyr)
+library(R.matlab)
+library(seqinr)
+library(reldna)
+library(Biostrings)
+library(RColorBrewer)
+
+library(som)
+setwd('/home/mikhail/Documents/t7/t7_rmd/')
+wd<-getwd()
+```
+Data on promoters and T7 bacteriophage genome used in previous work (accession NC_001604) are loaded. The genome is converted to a plain string format since there is no need is Bioconductor packages. Promoters are partitioned in classes (early, II, III).
+```{r echo=TRUE}
+promoters<-read.table('/home/mikhail/Documents/t7/t7_rmd/promoters.txt', skip=1, col.names = c('TSS', 'Strand', 'RNAP', 'Name'))
+#load('/home/mikhail/Documents/t7/t7_rmd/NC_001604.1.rda')
+library(ape)
+
+t7gb<-read.GenBank(access.nb = 'NC_001604', as.character = T) 
+t7gb<-t7gb$NC_001604
+
+sp6gb<-read.GenBank(access.nb = 'NC_004831', as.character = T)
+sp6gb<-sp6gb$NC_004831
+
+
+t7_genome_string<-paste0(t7gb, collapse = '')
+
+unknown<-c(1,23)
+early<-2:10
+classII<-11:17
+classIII<-c(18:22,24)
+```
+
+Utility directories to store promoter sequencs in string and numerical form are created (if not present)
+```{r echo=FALSE}
+#case for genome in string form
+
+dirs<-c('t7_genome_parts_string_mpot', 't7_genome_parts_string', 'Promoters_t7_numerical_form', 't7_mpots', 'Probs_t7', 'Perl_sist_output', 'Perl_sist_output_ionic_0.001')
+
+
+for (i in dirs) {
+  if (file.exists(paste0('/home/mikhail/Documents/t7/t7_rmd/', i))) {
+    unlink(paste0('/home/mikhail/Documents/t7/t7_rmd/', i), recursive = T)
+  } 
+}
+
+for (i in dirs) {
+  dir.create(paste0('/home/mikhail/Documents/t7/t7_rmd/', i))
+} 
+
+```
+
+String to numeric conversion function _str2n_ is created (mine, not to be mistaken with a different function in reldna package that is called s2n)
+
+```{r}
+str2n <- function(seq){
+  chs <- s2c(toupper(seq))
+  ns <- c()
+  for(ch in chs){
+    if (ch=='A') {ns <- c(ns, 1)}
+    if (ch=='C') {ns <- c(ns, 2)}
+    if (ch=='G') {ns <- c(ns, 3)}
+    if (ch=='T') {ns <- c(ns, 4)}
+  }
+  return(ns)
+}
+```
+Two sets of string are obtained for promoter sequences (750 b.p. in both directions from TST intervals for further SIDD calculation online using WebSIDD and [-200;100] b.p. - for electrostatic optential (EP) calculation). For SIDD calculation using Octave script the sequences are conversed into numerical form,  [-1000;1000] b.p. intervals are taken. All the resulting data are stored in corresponding directories.
+```{r tidy=TRUE}
+
+t7_promoters_num<-c()
+substrs_to_mpots<-list()
+
+for (i in promoters$TSS) {
+  s<-i-1000
+  if (s<0) {s<-0} 
+  f<-i+1000
+  if (f>nchar(t7_genome_string)) {f<-nchar(t7_genome_string)} 
+  write.fasta(substr(t7_genome_string, s, f), names=NULL, file.out = paste0(wd, '/t7_genome_parts_string/t7_', s,'_', f, '.fasta'))
+    # #writeLines(substr(t7_genome_string, s, f), con = paste0(wd, '/t7_genome_parts_string/t7_', s,'_', f, '.txt'))
+
+  # #s<-i-1000  #numerical form - for octave script - not needed here
+  # #if (s<0) {s<-0} 
+  # #f<-i+1000
+  # #if (f>nchar(t7_genome_string)) {f<-nchar(t7_genome_string)} 
+  # ##write.fasta(substr(t7_genome_string, s, f), names=NULL, file.out = paste0(wd, '/t7_genome_parts_string/t7_', s,'_', f, '.fasta'))
+# #  assign(paste0('num_t7_genome_',s,'_',f), t(str2n(substr(t7_genome_string, s, f))))
+  # ##t7_promoters_num<-rbind(t7_promoters_num, s2n(substr(t7_genome_string, s, f)))
+  # #write.table(t(str2n(substr(t7_genome_string, s, f))), file=paste0(wd, '/Promoters_t7_numerical_form/Promoters_t7_numerical_', i), append = FALSE, quote = FALSE, sep = "",
+     # #         row.names = FALSE,
+    # #col.names = FALSE)
+  
+  s_mpot<-i-200
+  f_mpot<-i+100
+  write.fasta(substr(t7_genome_string, s_mpot, f_mpot), names=NULL, file.out = paste0(wd, '/t7_genome_parts_string_mpot/t7_', s_mpot,'_', f_mpot, '.fasta'))
+  substrs_to_mpots<-c(substrs_to_mpots, substr(t7_genome_string, s_mpot, f_mpot))
+  #assign(paste0('t7_genome_mpot',s_mpot,'_',f_mpot), substr(t7_genome_string, s_mpot, f_mpot))
+}
+```
+
+EP calculation using lseqspline1D function is carried out.
+```{r echo=TRUE} 
+#mpot_lengths<-c()
+#for (i in seq_along(promoters$TSS)) { # sequences at the flanks do not need special treatment since they are within bounds
+#  mpot<-(lseqspline1D(substrs_to_mpots[[i]], bound = c(50,250), ref = 201))$mpot
+ # mpot_lengths<-c(mpot_lengths, length(mpot))
+#}
+
+
+mpots_t7<-c()
+mpot<-c()
+zout<- -150:150
+for (i in seq_along(promoters$TSS)) {
+   #mpot<-(lseqspline1D(substrs_to_mpots[[i]], bound = c(50,250), ref = 201))$mpot
+
+ # if(length(mpot)>min(mpot_lengths)) {
+  
+p<-lseqspline1D(substrs_to_mpots[[i]],ref=201,bound=c(50, 250))
+mpot<-p$mpot[p$x %in% zout]
+#print(str(p$mpot[p$x %in% zout]))
+   #write.table(mpot, paste0(wd, '/t7_mpots/', promoters$TSS[i]), quote = F, sep = '\t', row.names = F, col.names = F)
+  mpots_t7<-rbind(mpots_t7, mpot)
+}
+
+dimnames(mpots_t7)<-NULL
+
+chars_to_mpots_t7<-c()
+ for (i in substrs_to_mpots) {chars_to_mpots_t7<-rbind(chars_to_mpots_t7, unlist(strsplit(i, '')))}  #for further DNA distance analysis
+```
+
+Setting colors for T7 promoters profiles
+```{r Palette creating, echo=TRUE}
+
+col_early<-brewer.pal(length(early), 'Set1')
+col_classII<-brewer.pal(length(classII), 'Paired')
+col_classIII<-brewer.pal(length(classIII), 'Dark2')
+col_all<-c(col_early, col_classII, col_classIII)
+```
+
+Resulting EP profiles are plotted for whole calculated length (704 angstrom, difference in length is trimmed) together and separetely by classes (prior to it color palette is set).
+
+```{r echo=FALSE,  eval=FALSE}
+
+
+plot(zout, mpots_t7[1,], type='n', ylim=c(-0.07, -0.055), lwd=0.01, main='Electrostatic potential profiles\n for complete set of T7 promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in 1:nrow(mpots_t7)){
+  lines(zout, mpots_t7[i,], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name), cex =0.5, lty = c(1,1), lwd=1,  col =col_all, border = F, bg = "white")
+
+
+plot(zout, mpots_t7[1,], type='n', ylim=c(-0.07, -0.055), lwd=0.001, main='Electrostatic potential profiles\n for T7 early promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in early){
+  lines(zout, mpots_t7[i,], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[early]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[early], border = F, bg = "white")
+
+plot(zout, mpots_t7[1,], type='n', ylim=c(-0.07, -0.055), lwd=0.01, main='Electrostatic potential profiles\n for T7 class II promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in classII){
+  lines(zout, mpots_t7[i,], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classII], border = F, bg = "white")
+
+plot(zout, mpots_t7[1,], type='n', ylim=c(-0.07, -0.055), lwd=0.01, main='Electrostatic potential profiles\n for T7 class III promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in classIII){
+  lines(zout, mpots_t7[i,], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classIII], border = F, bg = "white")
+```
+
+And for [-100;100] b.p. interval
+```{r echo=TRUE}
+X201<--100:100
+plot(X201, mpots_t7[1,(150-100):(150+100)], type='n', ylim=range(mpots_t7), lwd=0.001, main='Electrostatic potential profiles\n for T7 early promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in early){
+  lines(X201, mpots_t7[i,(150-100):(150+100)], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[early]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[early], border = F, bg = "white")
+
+plot(X201, mpots_t7[1,(150-100):(150+100)], type='n', ylim=range(mpots_t7), lwd=0.01, main='Electrostatic potential profiles\n for T7 class II promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in classII){
+  lines(X201, mpots_t7[i,(150-100):(150+100)], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classII], border = F, bg = "white")
+
+plot(X201, mpots_t7[1,(150-100):(150+100)], type='n', ylim=range(mpots_t7), lwd=0.01, main='Electrostatic potential profiles\n for T7 class III promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in classIII){
+  lines(X201, mpots_t7[i,(150-100):(150+100)], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classIII], border = F, bg = "white")
+```
+
+#Stress-induced duplex destabilization (SIDD) of DNA profiles analysis
+
+Not shown here: two additional techniques for SIDD calculation. 
+1. __Michoel, van de Peer__ *octave* script;
+2. SIDD results are obtained using [WebSIDD](http://benham.genomecenter.ucdavis.edu/sibz/). Profiles were calculated for 5000 b.p.-long circular molecules for tempreature 310K, superhelical density -0.055, and ionic strength 0.01. The results are loaded; list of files need to be corrected to restore initial order (since WebSIDD output files are named in a different way).
+
+
+#SIDD calculation using SIST by C. Benham. 
+Needed DNA phragments are loaded and `perl` script from [Benham lab BitBucket](https://bitbucket.org/benhamlab/sist_codes) was used to calculate SIDD profiles for temperature 310K; sigma = 0.06; theta = 12; salt = 0.01 for linear form of DNA molecule.
+Order of output files is fixed.
+```{r}
+
+setwd(paste0(wd, '/sist/'))
+dir_parts_string<-dir(paste0(wd, '/t7_genome_parts_string'))
+dir_parts_string<-mixedsort(dir_parts_string)
+
+for (i in dir_parts_string){
+# #aa<-as.character(read.fasta(paste0(wd, '/t7_genome_parts_string/', i), as.string = T, set.attributes = F))
+# #print(substr(aa, nchar(aa)-1000-10, nchar(aa)-1000+1))
+  system(paste0('perl -X master.pl -a M -f /home/mikhail/Documents/t7/t7_rmd/t7_genome_parts_string/', i, ' -o /home/mikhail/Documents/t7/t7_rmd/Perl_sist_output/', i, '.tsv'))
+}
+
+dir_sist<-dir(paste0(wd, '/Perl_sist_output'))
+dir_sist<-mixedsort(dir_sist)
+```
+The resulting data are loaded and plotted.
+
+```{r}
+
+full_g_sist<-c()
+full_p_sist_t7<-c()
+full_pos_sist<-c()
+
+#since output files for sequences shorter than 2001 b.p. contain warning (that says so) at the first line the warning needs to be removed by skipping not 1 but 2 first rows.
+for (i in 1:length(dir_sist)) {
+   p<-read.table(paste0(wd, '/Perl_sist_output/', dir_sist[i]), skip=1, sep='\t', header=F, col.names = c('pos','P.x.', 'G.x.'))
+   p2<-p[,2:3]
+   if(p2[1,1]=='P(x)'){
+   p2<-p2[-1,]
+   }
+  deltag<-as.numeric(p2$G.x.)
+  print(max(deltag))
+  prob<-as.numeric(p2$P.x.)
+  #pos<-as.numeric(p$pos)   
+   
+  if(promoters$TSS[i]<1001) {
+
+    full_g_sist<-rbind(c(rep(NA, abs(length(deltag)-2001)), deltag), 
+                                                                    full_g_sist)
+    full_p_sist_t7<-rbind(c(rep(NA, abs(length(prob)-2001)), prob), 
+                                                                    full_p_sist_t7)
+    #full_pos_sist<-rbind(c(rep(NA, abs(length(pos)-2001)), pos),
+    #                                                                full_pos_sist)
+
+  } else 
+    if(promoters$TSS[i]>nchar(t7_genome_string)-1000) {
+  
+     full_g_sist<-rbind(c(deltag, rep(NA, abs(length(deltag)-2001))), 
+                                                                    full_g_sist)
+     full_p_sist_t7<-rbind(c(prob, rep(NA, abs(length(prob)-2001))), 
+                                                                    full_p_sist_t7)
+     #full_pos_sist<-rbind(c(pos, rep(NA, abs(length(pos)-2001))), 
+     #                                                               full_pos_sist)
+     #print(length(c(rep(NA, abs(length(p$pos)-2001)), p$pos)))
+    } else {
+    full_g_sist<-rbind(full_g_sist, deltag)
+    full_p_sist_t7<-rbind(full_p_sist_t7, prob)
+   # full_pos_sist<-rbind(full_pos_sist, pos)
+
+    } 
+  }
+
+```
+#Plotting results for _P_ value
+```{r}
+X750<--500:250
+X750_plot<-500:1250
+
+plot(X750,full_p_sist_t7[1, X750_plot], type='n', lwd=0.001, ylim=c(0, 1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for early promoters')
+abline(v=0, lty=2)
+for (i in early) {
+  lines(X750, full_p_sist_t7[i,X750_plot], type='l', lwd=1 , col=col_all[i])
+}
+legend('bottomleft', as.character(promoters$Name[early]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[early], border = F, bg = "white")
+
+
+plot(X750, full_p_sist_t7[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for class II promoters')
+abline(v=0, lty=2)
+for (i in classII) {
+  lines(X750, full_p_sist_t7[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classII], border = F, bg = "white")
+
+
+plot(X750, full_p_sist_t7[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability',  main='SIDD profiles for class III promoters')
+abline(v=0, lty=2)
+for (i in classIII) {
+  lines(X750, full_p_sist_t7[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classIII], border = F, bg = "white")
+```
+
+#And for additional energy value (_G_)
+
+
+
+#Dynamical characteristics data
+Additionally data on 200 b.p.-long sliding window GC-content are loaded.
+```{r}
+setwd(paste0(wd, '/t7_dynamic_characteristics/'))
+
+ae1_t7<-readMat(paste0(wd, '/t7_dynamic_characteristics/', 't7e01.mat'))$E01
+size1_t7<-readMat(paste0(wd, '/t7_dynamic_characteristics/', 't7d1.mat'))$d1
+taus1_t7<-readMat(paste0(wd, '/t7_dynamic_characteristics/', 't7_taus_1_2.mat'))$taus1
+c1_t7<-readMat(paste0(wd, '/t7_dynamic_characteristics/', 't7_c_1_2.mat'))$c1
+gc1_t7<-readMat(paste0(wd, '/t7_dynamic_characteristics/', 't7_gc_1_2.mat'))$gc
+
+
+for (i in c('ae', 'size', 'taus', 'gc', 'c')){
+  assign(paste0('full_', i, '_t7_forw'), c())
+}
+
+for (i in seq_along(promoters$TSS)) {
+  full_ae_t7_forw<-rbind(full_ae_t7_forw, ae1_t7[(promoters$TSS[i]-150):(promoters$TSS[i]+50)])
+  full_size_t7_forw<-rbind(full_size_t7_forw, size1_t7[(promoters$TSS[i]-150):(promoters$TSS[i]+50)])
+  full_taus_t7_forw<-rbind(full_taus_t7_forw, taus1_t7[(promoters$TSS[i]-150):(promoters$TSS[i]+50)])
+  full_c_t7_forw<-rbind(full_c_t7_forw, c1_t7[(promoters$TSS[i]-150):(promoters$TSS[i]+50)])
+  full_gc_t7_forw<-rbind(full_gc_t7_forw, gc1_t7[(promoters$TSS[i]-150):(promoters$TSS[i]+50)])
+}
+
+full_taus_t7_forw<-normalize(full_taus_t7_forw, byrow = T)
+full_c_t7_forw<-normalize(full_c_t7_forw, byrow =  T)
+full_gc_t7_forw<-normalize(full_gc_t7_forw, byrow =  T)
+
+```
+
+#Activation energy
+
+
+```{r}
+XX<-(-150:50)
+plot(XX,full_ae_t7_forw[1,], type='n',  ylim=range(full_ae_t7_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for total set of T7 promoters\n (consensus sequence region is highlightened)', panel.first=c(rect(-17, min(full_ae_t7_forw)-10, -5, max(full_ae_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_t7_forw)-10, 5, max(full_ae_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in seq_along(promoters$TSS)) {
+  lines(XX, full_ae_t7_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=-5, lty=3, col='red', lwd=3)
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_t7_forw))[early]), , border = F, bg = "white")
+
+plot(XX,full_ae_t7_forw[1,], type='n',  ylim=range(full_ae_t7_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for early promoters', panel.first=c(rect(-17, min(full_ae_t7_forw)-10, -5, max(full_ae_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_t7_forw)-10, 5, max(full_ae_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in early) {
+  lines(XX, full_ae_t7_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[early]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_t7_forw))[early]), border = F, bg = "white")
+
+
+plot(XX, full_ae_t7_forw[1,], type='n',   ylim=range(full_ae_t7_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for class II promoters', panel.first=c(rect(-17, min(full_ae_t7_forw)-10, -5, max(full_ae_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_t7_forw)-10, 5, max(full_ae_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in classII) {
+  lines(XX, full_ae_t7_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_t7_forw))[classII]), , border = F, bg = "white")
+
+
+plot(XX, full_ae_t7_forw[1,], type='n',  ylim=range(full_ae_t7_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for class III promoters', , panel.first=c(rect(-17, min(full_ae_t7_forw)-10, -5, max(full_ae_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_t7_forw)-10, 5, max(full_ae_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in classIII) {
+  lines(XX, full_ae_t7_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_t7_forw))[classIII]), border = F, bg = "white")
+
+```
+
+
+#size
+
+```{r}
+
+plot(XX,full_size_t7_forw[1,], type='n',  ylim=c(8.5, 10.5), xlab='Sequence', ylab='Size of OS', main='Size of OS profiles for total set of T7 promoters',  panel.first=c(rect(-17, min(full_size_t7_forw)-10, -5, max(full_size_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_size_t7_forw)-10, 5, max(full_size_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in seq_along(promoters$TSS)) {
+  lines(XX, full_size_t7_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[early], border = F, bg = "white")
+
+plot(XX,full_size_t7_forw[1,], type='n',  ylim=c(8.5,10.5), xlab='Sequence', ylab='Size of OS', main='Size of OS profiles for early promoters',  panel.first=c(rect(-17, min(full_size_t7_forw)-10, -5, max(full_size_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_size_t7_forw)-10, 5, max(full_size_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+abline(v=0, lty=2)
+for (i in early) {
+  lines(XX, full_size_t7_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[early]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[early], border = F, bg = "white")
+
+
+plot(XX, full_size_t7_forw[1,], type='n',  ylim=c(8.5,10.5), xlab='Sequence', ylab='Size of OS', main='Size of OS profiles for class II promoters',  panel.first=c(rect(-17, min(full_size_t7_forw)-10, -5, max(full_size_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_size_t7_forw)-10, 5, max(full_size_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+abline(v=0, lty=2)
+for (i in classII) {
+  lines(XX, full_size_t7_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_t7_forw))[classII]), border = F, bg = "white")
+
+
+plot(XX, full_size_t7_forw[1,], type='n',  ylim=c(8.5,10.5), xlab='Sequence', ylab='Size of OS', main='Size of OS profiles for class III promoters',  panel.first=c(rect(-17, min(full_size_t7_forw)-10, -5, max(full_size_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_size_t7_forw)-10, 5, max(full_size_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+abline(v=0, lty=2)
+for (i in classIII) {
+  lines(XX, full_size_t7_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_t7_forw))[classIII]), border = F, bg = "white")
+```
+
+
+#GC-content calculated using 200 b.p.-long sliding window (to compare to dynamical properties data) 
+
+
+```{r echo=F, eval=F}
+XX<-(-150:50)
+plot(XX,full_gc_t7_forw[1,], type='n',  ylim=range(full_gc_t7_forw), xlab='Sequence', ylab='Activation energy', main='GC-content profiles for total set of T7 promoters\n (consensus sequence region is highlightened)', panel.first=c(rect(-17, min(full_gc_t7_forw)-10, -5, max(full_gc_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_gc_t7_forw)-10, 5, max(full_gc_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in seq_along(promoters$TSS)) {
+  lines(XX, full_gc_t7_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=-5, lty=3, col='red', lwd=3)
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_gc_t7_forw))[early]), border = F, bg = "white")
+
+plot(XX,full_gc_t7_forw[1,], type='n',  ylim=range(full_gc_t7_forw), xlab='Sequence', ylab='Activation energy', main='GC-content profiles for early promoters', panel.first=c(rect(-17, min(full_gc_t7_forw)-10, -5, max(full_gc_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_gc_t7_forw)-10, 5, max(full_gc_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in early) {
+  lines(XX, full_gc_t7_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[early]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_gc_t7_forw))[early]), border = F, bg = "white")
+
+
+plot(XX, full_gc_t7_forw[1,], type='n',   ylim=range(full_gc_t7_forw), xlab='Sequence', ylab='Activation energy', main='GC-content profiles for class II promoters', panel.first=c(rect(-17, min(full_gc_t7_forw)-10, -5, max(full_gc_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_gc_t7_forw)-10, 5, max(full_gc_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in classII) {
+  lines(XX, full_gc_t7_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_gc_t7_forw))[classII]), border = F, bg = "white")
+
+
+plot(XX, full_gc_t7_forw[1,], type='n',  ylim=range(full_gc_t7_forw), xlab='Sequence', ylab='Activation energy', main='GC-content profiles for class III promoters', , panel.first=c(rect(-17, min(full_gc_t7_forw)-10, -5, max(full_gc_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_gc_t7_forw)-10, 5, max(full_gc_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in classIII) {
+  lines(XX, full_gc_t7_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_gc_t7_forw))[classIII]), border = F, bg = "white")
+
+consensus23bp<-'taatacgactcactatagggaga'
+consens_polya<-toupper(paste0(paste(replicate(1000-17, "a"), collapse = ""), consensus23bp, paste(replicate(1000-5, "a"), collapse ="")))
+
+write.fasta(consens_polya, file.out = 'consensus_polya.fasta', names = NULL, as.string=T)
+```
+
+
+
+
+#Dynamical characteristics data - for mutated T7 genome with insertions of 23 b.p. promoter consensus in random sites
+
+```{r}
+consensus23bp<-'TAATACGACTCACTATAGGGAGA'
+set.seed(2510)
+rand_sites <- sample(0:nchar(t7_genome_string), nrow(promoters), replace=T)
+
+
+mutated_t7_genome_string<-t7_genome_string
+for (i in rand_sites) {
+        substr(mutated_t7_genome_string, i-17, i+5)<-consensus23bp
+}
+
+dir.create('mutated_t7_dynamic_characteristics')
+
+```
+
+Additionally data on 200 b.p.-long sliding window GC-content are loaded.
+```{r}
+
+```
+
+#Activation energy
+
+
+```{r}
+XX<-(-150:50)
+plot(XX,full_ae_t7_forw[1,], type='n',  ylim=range(full_ae_t7_forw), xlab='Sequence', ylab='Activation energy', main='Activation energy profiles for \n random T7 genome fragment with inserted consensus sequence \n (consensus sequence region is highlightened)', panel.first=c(rect(-17, min(full_ae_t7_forw)-10, -5, max(full_ae_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_t7_forw)-10, 5, max(full_ae_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in seq_along(rand_sites)) {
+  lines(XX, full_ae_t7_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=-5, lty=3, col='red', lwd=3)
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(paste0('Random site (pseudo-TSS at ', rand_sites, ')')), cex =0.5, lty = c(1,1), lwd=1,  col =col_all, border = F, bg = "white")
+
+```
+
+
+#size
+
+```{r}
+plot(XX,full_size_t7_forw[1,], type='n',  ylim=range(full_size_t7_forw), xlab='Sequence', ylab='Size of OS', main='Size of OS profiles for \n random T7 genome fragment with inserted consensus sequence \n (consensus sequence region is highlightened)',  panel.first=c(rect(-17, min(full_size_t7_forw)-10, -5, max(full_size_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_size_t7_forw)-10, 5, max(full_size_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in seq_along(rand_sites)) {
+  lines(XX, full_size_t7_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(paste0('Random site (pseudo-TSS at ', rand_sites, ')')), cex =0.5, lty = c(1,1), lwd=1,  col =col_all, border = F, bg = "white")
+```
+
+
+#bendability profiles calculated using `reldna` package
+
+##for complete T7 genome
+
+```{r}
+bend_full_t7<-bendability(t7_genome_string, bound=c(50, nchar(t7_genome_string)-50), width=200)
+plot(bend_full_t7, type='l')
+```
+
+##for promoter regions
+
+```{r}
+bend_proms_t7<-c()
+for(i in promoters$TSS) {
+  bend_proms_t7<-cbind(bend_proms_t7, bendability(substr(t7_genome_string, i-200, i+100), bound=c(50, 250), width=1) )
+}
+```
+
+##plotting bendability for promoter regions profiles
+
+
+```{r}
+plot(XX, bend_proms_t7[,1],ty='n', ylim=range(bend_proms_t7), main='Bendability profiles for complete set of T7 promoters', xlab='Sequence (b.p.)', ylab='Bendability', panel.first=c(rect(-17, min(bend_proms_t7)-10, -5, max(bend_proms_t7)+10, col = 'aliceblue', border=F), rect(-5, min(bend_proms_t7)-10, 5, max(bend_proms_t7)+10, col = 'papayawhip', border=F)), cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+abline(v=-35*-4:4, lty=3, col='grey' )
+abline(v=0, lty=3, col='red', lwd=2)
+for (i in seq_along(promoters$TSS)) {
+    lines(XX, bend_proms_t7[,i],ty='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name), cex =0.5, lty = c(1,1), lwd=1,  col =col_all, border = F, bg = "white")
+
+#par(mfrow=c(3,1))
+plot(XX, bend_proms_t7[,1],ty='n', ylim=range(bend_proms_t7), panel.first=c(rect(-17, min(bend_proms_t7)-10, -5, max(bend_proms_t7)+10, col = 'aliceblue', border=F), rect(-5, min(bend_proms_t7)-10, 5, max(bend_proms_t7)+10, col = 'papayawhip', border=F)), cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+abline(v=-35*-4:4, lty=3, col='grey' )
+abline(v=0, lty=3, col='red', lwd=2)
+for (i in early) {
+    lines(XX, bend_proms_t7[,i],ty='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[early]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[early], border = F, bg = "white")
+
+plot(XX, bend_proms_t7[,1],ty='n', ylim=range(bend_proms_t7), panel.first=c(rect(-17, min(bend_proms_t7)-10, -5, max(bend_proms_t7)+10, col = 'aliceblue', border=F), rect(-5, min(bend_proms_t7)-10, 5, max(bend_proms_t7)+10, col = 'papayawhip', border=F)), cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+abline(v=-35*-4:4, lty=3, col='grey' )
+abline(v=0, lty=3, col='red', lwd=2)
+for (i in classII) {
+    lines(XX, bend_proms_t7[,i],ty='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classII], border = F, bg = "white")
+
+plot(XX, bend_proms_t7[,1],ty='n', ylim=range(bend_proms_t7), panel.first=c(rect(-17, min(bend_proms_t7)-10, -5, max(bend_proms_t7)+10, col = 'aliceblue', border=F), rect(-5, min(bend_proms_t7)-10, 5, max(bend_proms_t7)+10, col = 'papayawhip', border=F)), cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+abline(v=-35*-4:4, lty=3, col='grey' )
+abline(v=0, lty=3, col='red', lwd=2)
+for (i in classIII) {
+    lines(XX, bend_proms_t7[,i],ty='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classIII], border = F, bg = "white")
+#    bend_polyA<-bendability(consensus_polyA, bound=c(500, 1500), width=200)
+ #   bend_polyT<-bendability(consensus_polyT, bound=c(500, 1500), width=200)
+
+```
+
+
+#GC3 evaluation
+
+
+
+```{r message=FALSE}
+
+wd<-getwd()
+```
+Data on promoters and T7 bacteriophage genome used in previous work (accession NC_001604) are loaded. The genome is converted to a plain string format since there is no need is Bioconductor packages.   Promoters are partitioned in classes (early, II, III).
+```{r echo=TRUE}
+promoters_SP6<-c()
+promoters_SP6$TSS<-c(6135, 8428, 9129, 12559, 13022, 14303, 17445, 22430, 37790, 39927)
+# # promoters_SP6$TSS<-c(6135, 6304   , 8428, 9129, 12559, 13022, 14303, 17445, 22430, 29410    , 37790, 39927)  # # from https://richardson.med.harvard.edu/publications_190-231/200.pdf
+
+# # promoters_SP6$TSS<-c(2121       , 6135, 6304, 8428, 9129, 12559, 13022, 14303, 17445, 22430,  37790, 39927)  # # from https://oup.silverchair-cdn.com/oup/backfile/Content_public/Journal/nar/33/19/10.1093/nar/gki915/2/gki915.pdf?Expires=1487070199&Signature=a5EOGR6pcSqyhodVVnohz4CYKmd1PMLk5I6wI4yPZgELkbJ7PSV-5fZWOAvgdnRL434aFa00GV9OtJt~ZI4F6RcqGf5FFQMQEByn3-4H6ZcOIe5Tajxh2qAsyFRKMKRDnAYbJhgoo1tF9fm2hab8LF~yLAaMZVX9qqlSdlVjZk3DQ1gPfEpv4TXFQnAyppFrNT1on1gsu94nXUkdTNp~FhfRNaOJOdKhf0j0aUCDtX6hLFY9DHyjuC43-XROntiDBJttHIv~9r1CzCpe5Z~-Q2V920kusseDyi9mhrytyK1nFiU4s9wxs1OX1AEN1Nkpor4C2GliCvZWJxq~VrxNMw__&Key-Pair-Id=APKAIUCZBIA4LVPAVW3Q
+promoters_SP6$Name<-paste0('SP6_Promoter_', 1:length(promoters_SP6$TSS))
+##load('NC_001604.1.rda')
+#sp6_genome_string<-paste0(SP6seq, collapse='')
+sp6_genome_string <- paste0(sp6gb, collapse = '')
+#unknown<-c(1,23)
+#early<-2:10
+#classII<-11:17
+#classIII<-c(18:22,24)
+
+#gene (and promoters) partition (from genome map)
+metabolic<-1:7
+structural<-8:10
+```
+
+Utility directories to store promoter sequencs in string and numerical form are created (if not present)
+```{r echo=FALSE}
+#case for genome in string form
+
+dirs<-c('Perl_sist_output', 'Perl_sist_output_ionic_0.001', 'sp6_genome_parts_string', 'BZ_transition_Perl_sist_output_pSV2_variants')
+
+
+for (i in dirs) {
+  if (file.exists(paste0('/home/mikhail/Documents/t7/SP6_all_promoter_variants/', i))) {
+    unlink(paste0('/home/mikhail/Documents/t7/SP6_all_promoter_variants/', i), recursive = T)
+  } 
+}
+
+for (i in dirs) {
+  dir.create(paste0('/home/mikhail/Documents/t7/SP6_all_promoter_variants/', i))
+} 
+
+```
+
+
+Two sets of string are obtained for promoter sequences (750 b.p. in both directions from TST intervals for further SIDD calculation online using WebSIDD and [-200;100] b.p. - for electrostatic optential (EP) calculation). For SIDD calculation using Octave script the sequences are conversed into numerical form,  [-1000;1000] b.p. intervals are taken. All the resulting data are stored in corresponding directories.
+```{r tidy=TRUE}
+
+#t7_promoters_num<-c()
+substrs_to_mpots_sp6<-list()
+
+for (i in promoters_SP6$TSS) {
+  s<-i-1000
+  if (s<0) {s<-0} 
+  f<-i+1000
+  if (f>nchar(sp6_genome_string)) {f<-nchar(sp6_genome_string)} 
+  write.fasta(substr(sp6_genome_string, s, f), names=NULL, file.out = paste0(wd, '/sp6_genome_parts_string/sp6_', s,'_', f, '.fasta'))
+    # #writeLines(substr(t7_genome_string, s, f), con = paste0(wd, '/t7_genome_parts_string/t7_', s,'_', f, '.txt'))
+
+#  s<-i-1000
+ # if (s<0) {s<-0} 
+  #f<-i+1000
+  #if (f>nchar(t7_genome_string)) {f<-nchar(t7_genome_string)} 
+  #write.fasta(substr(t7_genome_string, s, f), names=NULL, file.out = paste0(wd, '/t7_genome_parts_string/t7_', s,'_', f, '.fasta'))
+  #assign(paste0('num_t7_genome_',s,'_',f), t(str2n(substr(t7_genome_string, s, f))))
+  #t7_promoters_num<-rbind(t7_promoters_num, s2n(substr(t7_genome_string, s, f)))
+  #write.table(t(str2n(substr(t7_genome_string, s, f))), file=paste0(wd, '/Promoters_t7_numerical_form/Promoters_t7_numerical_', i), append = FALSE, quote = FALSE, sep = "",
+   #           row.names = FALSE,
+    #          col.names = FALSE)
+  
+  s_mpot<-i-200
+  f_mpot<-i+100
+  #write.fasta(substr(t7_genome_string, s_mpot, f_mpot), names=NULL, file.out = paste0(wd, '/t7_genome_parts_string_mpot/t7_', s_mpot,'_', f_mpot, '.fasta'))
+  substrs_to_mpots_sp6<-c(substrs_to_mpots_sp6, substr(sp6_genome_string, s_mpot, f_mpot))
+  #assign(paste0('t7_genome_mpot',s_mpot,'_',f_mpot), substr(t7_genome_string, s_mpot, f_mpot))
+}
+
+chars_to_mpots_sp6<-c()
+ for (i in substrs_to_mpots_sp6) {chars_to_mpots_sp6<-rbind(chars_to_mpots_sp6, unlist(strsplit(i, '')))}  #for further DNA distance analysis
+```
+
+EP calculation using lseqspline1D function is carried out.
+```{r echo=TRUE} 
+#mpot_lengths<-c()
+#for (i in seq_along(promoters$TSS)) { # sequences at the flanks do not need special treatment since they are within bounds
+ # mpot<-(lseqspline1D(substrs_to_mpots[[i]], bound = c(50,250), ref = 201))$mpot
+  #mpot_lengths<-c(mpot_lengths, length(mpot))
+#}
+
+
+mpots_sp6<-c()
+mpot<-c()
+zout<- -150:150
+for (i in seq_along(promoters_SP6$TSS)) {
+   #mpot<-(lseqspline1D(substrs_to_mpots_sp6[[i]], bound = c(50,250), ref = 201))$mpot
+
+ # if(length(mpot)>min(mpot_lengths)) {
+  
+p<-lseqspline1D(substrs_to_mpots_sp6[[i]],ref=201,bound=c(50, 250))
+mpot<-p$mpot[p$x %in% zout]
+print(substrs_to_mpots_sp6[[i]])
+#print(str(p$mpot[p$x %in% zout]))
+   #write.table(mpot, paste0(wd, '/t7_mpots_sp6/', promoters$TSS[i]), quote = F, sep = '\t', row.names = F, col.names = F)
+  mpots_sp6<-rbind(mpots_sp6, mpot)
+}
+
+dimnames(mpots_sp6)<-NULL
+```
+
+Resulting EP profiles are plotted for whole calculated length (704 angstrom, difference in length is trimmed) together and separetely by classes (prior to it color palette is set).
+
+```{r echo=TRUE}
+
+#col_early<-brewer.pal(length(early), 'Set1')
+#col_classII<-brewer.pal(length(classII), 'Paired')
+#col_classIII<-brewer.pal(length(classIII), 'Dark2')
+#col_all<-c(col_early, col_classII, col_classIII)
+
+
+col_metabolic<-brewer.pal(length(c(metabolic, structural)), 'Paired')[seq_along(metabolic)]
+col_structural<-brewer.pal(length(c(metabolic, structural)), 'Paired')[8:10]
+col_all<-c(col_metabolic, col_structural)
+
+plot(zout, mpots_sp6[1,], type='n', ylim=range(mpots_sp6), lwd=0.01, main='Electrostatic potential profiles\n for complete set of SP6 promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in 1:nrow(mpots_sp6)){
+  lines(zout, mpots_sp6[i,], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters_SP6$Name), cex =0.5, lty = c(1,1), lwd=1,  col =col_all, border = F, bg = "white")
+
+
+plot(zout, mpots_sp6[1,], type='n', ylim=c(-0.07, -0.055), lwd=0.001, main='Electrostatic potential profiles\n for SP6 metabolic promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in metabolic){
+  lines(zout, mpots_sp6[i,], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters_SP6$Name[metabolic]), cex =0.5, lty = c(1,1), lwd=1,  col =col_metabolic, border = F, bg = "white")
+
+plot(zout, mpots_sp6[1,], type='n', ylim=c(-0.07, -0.055), lwd=0.01, main='Electrostatic potential profiles\n for SP6 structural promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in structural){
+  lines(zout, mpots_sp6[i,], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters_SP6$Name[structural]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[structural], border = F, bg = "white")
+
+#plot(zout, mpots_t7[1,], type='n', ylim=c(-0.07, -0.055), lwd=0.01, main='Electrostatic potential profiles\n for T7 class III promoters', xlab='Sequence (nts)', ylab='EP value')
+#abline(v=0, lty=2)
+#for (i in classIII){
+  #lines(zout, mpots_t7[i,], type='l', lwd=1, col=col_all[i])
+#}
+#legend('topleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classIII], border = F, bg = "white")
+```
+
+And for [-100;100] b.p. interval
+```{r echo=TRUE}
+X201<--100:100
+plot(X201, mpots_sp6[1,(150-100):(150+100)], type='n', ylim=range(mpots_sp6), lwd=0.001, main='Electrostatic potential profiles\n for SP6 metabolic promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in metabolic){
+  lines(X201, mpots_sp6[i,(150-100):(150+100)], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters_SP6$Name[metabolic]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[metabolic], border = F, bg = "white")
+
+plot(X201, mpots_sp6[1,(150-100):(150+100)], type='n', ylim=range(mpots_sp6), lwd=0.01, main='Electrostatic potential profiles\n for SP6 structural promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in structural){
+  lines(X201, mpots_sp6[i,(150-100):(150+100)], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters_SP6$Name[structural]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[structural], border = F, bg = "white")
+
+```
+
+
+#Stress-induced duplex destabilization (SIDD) of DNA profiles analysis
+
+SIDD results are obtained using [WebSIDD](http://benham.genomecenter.ucdavis.edu/sibz/). Profiles were calculated for 5000 b.p.-long circular molecules for tempreature 310K, superhelical density -0.055, and ionic strength 0.01. The results are loaded; list of files need to be corrected to restore initial order (since WebSIDD output files are named in a different way).
+
+```{r}
+#setwd(paste0(wd, '/t7_results_sidd_online/'))
+dir_t7_sidd<-dir(paste0(wd, '/t7_results_sidd_online/'))
+dir_t7_sidd<-mixedsort(dir_t7_sidd)
+```
+
+The data on SIDD are converted to 2 matrix (for opening probability _P_ and adittional energy _G_, correspondingly)
+
+#SIDD calculation using SIST by C. Benham. 
+Needed DNA phragments are loaded and `perl` script from [Benham lab BitBucket](https://bitbucket.org/benhamlab/sist_codes) was used to calculate SIDD profiles for temperature 310K; sigma = 0.06; theta = 12; salt = 0.01 for linear form of DNA molecule.
+Order of output files is fixed.
+```{r}
+
+setwd(paste0(wd, '/sist/'))
+dir_parts_string<-dir(paste0(wd, '/sp6_genome_parts_string'))
+dir_parts_string<-mixedsort(dir_parts_string)
+
+for (i in dir_parts_string){
+# #aa<-as.character(read.fasta(paste0(wd, '/t7_genome_parts_string/', i), as.string = T, set.attributes = F))
+# #print(substr(aa, nchar(aa)-1000-10, nchar(aa)-1000+1))
+  system(paste0('perl -X master.pl -a M -f /home/mikhail/Documents/t7/SP6_all_promoter_variants/sp6_genome_parts_string/', i, ' -o /home/mikhail/Documents/t7/SP6_all_promoter_variants/Perl_sist_output/', i, '.tsv'))
+}
+
+dir_sist<-dir(paste0(wd, '/Perl_sist_output'))
+dir_sist<-mixedsort(dir_sist)
+```
+The resulting data are loaded and plotted.
+
+```{r}
+
+full_g_sist<-c()
+full_p_sist_sp6<-c()
+full_pos_sist<-c()
+
+#since output files for sequences shorter than 2001 b.p. contain warning (that says so) at the first line the warning needs to be removed by skipping not 1 but 2 first rows.
+for (i in 1:length(dir_sist)) {
+   p<-read.table(paste0(wd, '/Perl_sist_output/', dir_sist[i]), skip=1, sep='\t', header=F, col.names = c('pos','P.x.', 'G.x.'))
+   p2<-p[,2:3]
+   if(p2[1,1]=='P(x)'){
+   p2<-p2[-1,]
+   }
+  deltag<-as.numeric(p2$G.x.)
+  print(max(deltag))
+  prob<-as.numeric(p2$P.x.)
+  #pos<-as.numeric(p$pos)   
+   
+  if(promoters_SP6$TSS[i]<1001) {
+
+    #full_g_sist<-rbind(c(rep(NA, abs(length(deltag)-2001)), deltag), 
+     #                                                               full_g_sist)
+    full_p_sist_sp6<-rbind(c(rep(NA, abs(length(prob)-2001)), prob), 
+                                                                    full_p_sist_sp6)
+    #full_pos_sist<-rbind(c(rep(NA, abs(length(pos)-2001)), pos),
+    #                                                                full_pos_sist)
+
+  } else 
+    if(promoters_SP6$TSS[i]>nchar(t7_genome_string)-1000) {
+  
+     #full_g_sist<-rbind(c(deltag, rep(NA, abs(length(deltag)-2001))), 
+      #                                                              full_g_sist)
+     full_p_sist_sp6<-rbind(c(prob, rep(NA, abs(length(prob)-2001))), 
+                                                                    full_p_sist_sp6)
+     #full_pos_sist<-rbind(c(pos, rep(NA, abs(length(pos)-2001))), 
+     #                                                               full_pos_sist)
+     #print(length(c(rep(NA, abs(length(p$pos)-2001)), p$pos)))
+    } else {
+    full_g_sist<-rbind(full_g_sist, deltag)
+    full_p_sist_sp6<-rbind(full_p_sist_sp6, prob)
+   # full_pos_sist<-rbind(full_pos_sist, pos)
+
+  } 
+}
+
+```
+#Plotting results for _P_ value
+```{r}
+X750_plot<-500:1250
+svg('/home/mikhail/Documents/t7/SP6_all_promoter_variants/sp6_promoters_sist_sidd.svg')
+par(mfrow=c(2,1))
+plot(X750,full_p_sist_sp6[1, X750_plot], type='n', lwd=0.001, ylim=c(0, 1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for SP6 metabolic promoters')
+abline(v=0, lty=2)
+for (i in metabolic) {
+  lines(X750, full_p_sist_sp6[i,X750_plot], type='l', lwd=1 , col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[metabolic]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[metabolic], border = F, bg = "white")
+
+
+plot(X750, full_p_sist_sp6[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for SP6 structural promoters')
+abline(v=0, lty=2)
+for (i in structural) {
+  lines(X750, full_p_sist_sp6[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[structural]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[structural], border = F, bg = "white")
+dev.off()
+
+plot(X750, full_p_sist_sp6[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability',  main='SIDD profiles for all promoters')
+abline(v=0, lty=2)
+for (i in c(metabolic, structural)) {
+  lines(X750, full_p_sist_sp6[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[c(metabolic, structural)]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[c(metabolic, structural)], border = F, bg = "white")
+```
+
+
+#Plotting results for _P_ value (complete plasmid)
+```{r}
+
+svg('/home/mikhail/Documents/t7/SP6_all_promoter_variants/sp6_promoters_sist_sidd_full_plasmid.svg')
+par(mfrow=c(2,1))
+plot(full_p_sist_sp6[1,], type='n', lwd=0.001, ylim=c(0, 1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for SP6 metabolic promoters')
+abline(v=0, lty=2)
+for (i in metabolic) {
+  lines(full_p_sist_sp6[i,], type='l', lwd=1 , col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[metabolic]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[metabolic], border = F, bg = "white")
+
+
+plot(full_p_sist_sp6[1,], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for SP6 structural promoters')
+abline(v=0, lty=2)
+for (i in structural) {
+  lines(full_p_sist_sp6[i,], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[structural]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[structural], border = F, bg = "white")
+dev.off()
+
+plot(X750, full_p_sist_sp6[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability',  main='SIDD profiles for all promoters')
+abline(v=0, lty=2)
+for (i in c(metabolic, structural)) {
+  lines(X750, full_p_sist_sp6[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[c(metabolic, structural)]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[c(metabolic, structural)], border = F, bg = "white")
+```
+
+
+#And for additional energy value (_G_)
+
+```{r eval=FALSE}
+
+plot(X750, full_g_sist[1,X750_plot], type='n', lwd=0.001, ylim=range(full_g_sist, na.rm=T), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for early promoters')
+abline(v=0, lty=2)
+for (i in early) {
+  lines(X750, full_g_sist[i,X750_plot], type='l', lwd=1 , col=col_all[i])
+}
+legend('bottomleft', as.character(promoters$Name[early]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_g_sist))[early]), border = F, bg = "white")
+
+
+plot(X750, full_g_sist[1,X750_plot], type='n', lwd=0.001, ylim=range(full_g_sist[1,], na.rm=T), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for class II promoters')
+abline(v=0, lty=2)
+for (i in classII) {
+  lines(X750, full_g_sist[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_g_sist))[classII]), border = F, bg = "white")
+
+
+plot(X750, full_g_sist[1,X750_plot], type='n', lwd=0.001, ylim=range(full_g_sist[1,], na.rm=T), xlab='Sequence', ylab='Opening probability',  main='SIDD profiles for class III promoters')
+abline(v=0, lty=2)
+for (i in classIII) {
+  lines(X750, full_g_sist[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_g_sist))[classIII]), border = F, bg = "white")
+
+
+
+```
+
+BZ tranzition probability profiles (sist code)
+```{r eval=FALSE}
+setwd(paste0(wd, '/sist/'))
+dir_parts_string<-dir(paste0(wd, '/sp6_genome_parts_string'))
+dir_parts_string<-mixedsort(dir_parts_string)
+
+for (i in dir_parts_string){
+# #aa<-as.character(read.fasta(paste0(wd, '/t7_genome_parts_string/', i), as.string = T, set.attributes = F))
+# #print(substr(aa, nchar(aa)-1000-10, nchar(aa)-1000+1))
+  system(paste0('perl -X master.pl -a M -f /home/mikhail/Documents/t7/SP6_all_promoter_variants/sp6_genome_parts_string/', i, ' -o /home/mikhail/Documents/t7/SP6_all_promoter_variants/Perl_sist_output/', i, '.tsv'))
+}
+
+dir_sist<-dir(paste0(wd, '/Perl_sist_output'))
+dir_sist<-mixedsort(dir_sist)
+```
+The resulting data are loaded and plotted.
+
+```{r}
+
+full_g_sist<-c()
+full_p_sist_sp6<-c()
+full_pos_sist<-c()
+
+#since output files for sequences shorter than 2001 b.p. contain warning (that says so) at the first line the warning needs to be removed by skipping not 1 but 2 first rows.
+for (i in 1:length(dir_sist)) {
+   p<-read.table(paste0(wd, '/Perl_sist_output/', dir_sist[i]), skip=1, sep='\t', header=F, col.names = c('pos','P.x.', 'G.x.'))
+   p2<-p[,2:3]
+   if(p2[1,1]=='P(x)'){
+   p2<-p2[-1,]
+   }
+  deltag<-as.numeric(p2$G.x.)
+  print(max(deltag))
+  prob<-as.numeric(p2$P.x.)
+  #pos<-as.numeric(p$pos)   
+   
+  if(promoters_SP6$TSS[i]<1001) {
+
+    full_g_sist<-rbind(c(rep(NA, abs(length(deltag)-2001)), deltag), 
+                                                                    full_g_sist)
+    full_p_sist_sp6<-rbind(c(rep(NA, abs(length(prob)-2001)), prob), 
+                                                                    full_p_sist_sp6)
+    #full_pos_sist<-rbind(c(rep(NA, abs(length(pos)-2001)), pos),
+    #                                                                full_pos_sist)
+
+  } else 
+    if(promoters_SP6$TSS[i]>nchar(t7_genome_string)-1000) {
+  
+     full_g_sist<-rbind(c(deltag, rep(NA, abs(length(deltag)-2001))), 
+                                                                    full_g_sist)
+     full_p_sist_sp6<-rbind(c(prob, rep(NA, abs(length(prob)-2001))), 
+                                                                    full_p_sist_sp6)
+     #full_pos_sist<-rbind(c(pos, rep(NA, abs(length(pos)-2001))), 
+     #                                                               full_pos_sist)
+     #print(length(c(rep(NA, abs(length(p$pos)-2001)), p$pos)))
+    } else {
+    full_g_sist<-rbind(full_g_sist, deltag)
+    full_p_sist_sp6<-rbind(full_p_sist_sp6, prob)
+   # full_pos_sist<-rbind(full_pos_sist, pos)
+
+    } 
+  }
+```
+#Dynamical characteristics data
+
+```{r dynchars function usage}
+
+dynchars<-function(seq, interval_size) {
+  if (missing(seq))
+    stop("Need to specify sequence (as a vector of chars)")
+  
+  if (missing(interval_size))
+    stop("Need to specify interval size")
+  
+  if(!is.character(seq))
+    stop("Sequence must be a character vector containing A, C, G, T letters only")
+  
+seq<-toupper(seq)
+seq<-c(seq, seq[2:(interval_size)])
+
+a<-3.4*10^(-10)
+I<-c(7.6, 4.8, 8.2, 4.1)*10^(-44)
+K<-c(227, 155, 220, 149)*10^(-20)
+V<-c(2.09, 1.43, 3.12, 2.12)*10^(-20)
+tau<-c(127, 99, 140, 84)
+
+csA<-cumsum(seq=='A') 
+csT<-cumsum(seq=='T')
+csG<-cumsum(seq=='G')
+csC<-cumsum(seq=='C')
+
+countA = csA[interval_size:length(csA)]-c(0, csA[1:(length(csA)-interval_size)])
+countT = csT[interval_size:length(csT)]-c(0, csT[1:(length(csT)-interval_size)])
+countG = csG[interval_size:length(csG)]-c(0, csG[1:(length(csG)-interval_size)])
+countC = csC[interval_size:length(csC)]-c(0, csC[1:(length(csC)-interval_size)])
+
+M<-cbind(countA, countT, countG, countC)/interval_size
+M_comp<-cbind(countT, countA, countC, countG)/interval_size
+M_comp<-apply(t(M_comp),1,rev) 
+Is<-as.numeric(M%*%I)#! numeric conversion
+Ks<-as.numeric(M%*%K)
+Vs<-as.numeric(M%*%V)
+
+E01<-(8*(Ks*Vs)^0.5)* 6E23 / 4184
+d1<-((Ks*a^2)/Vs)^(0.5)/a;
+c1<-(Ks*a^2/Is)^0.5
+m1<-E01/c1/6.011E-26
+taus1<-as.numeric(M%*%tau) #!as.numeric conversion
+gc = M[,3] + M[,4]
+
+Is<-as.numeric(M%*%I)#! numeric conversion
+Ks<-as.numeric(M%*%K)
+Vs<-as.numeric(M%*%V)
+
+
+E02<- 8*(Ks*Vs)^0.5  * 6E23 / 4184;
+d2<-((Ks*a^2)/Vs)^(0.5)/a;
+c2<-(Ks*a^2/Is)^0.5;
+m2<-E02/c2/6.011E-26;
+taus2<-as.numeric(M_comp%*%tau)
+
+
+dynchars_return<-list(E01=E01, d1=d1, c1=c1, m1=m1, taus1=taus1, gc=gc, E02=E02, d2=d2, c2=c2, m2=m2, taus2=taus2, gc=gc)
+
+return(dynchars_return)
+
+}
+
+sp6dynchars<-dynchars(sp6gb, 200) #sequences from Genbank
+t7dynchars<-dynchars(t7gb, 200)
+```
+
+Additionally data on 200 b.p.-long sliding window GC-content are loaded.
+```{r, eval=FALSE}
+
+```
+
+
+```{r data on sp6 dyn chars preparing}
+ae1_sp6<-sp6dynchars$E01
+size1_sp6<-sp6dynchars$d1
+taus1_sp6<-sp6dynchars$taus1
+c1_sp6<-sp6dynchars$c1
+gc1_sp6<-sp6dynchars$gc
+
+
+
+for (i in c('ae', 'size', 'taus', 'gc', 'c')){
+  assign(paste0('full_', i, '_sp6_forw'), c())
+}
+
+for (i in seq_along(promoters_SP6$TSS)) {
+  full_ae_sp6_forw<-rbind(full_ae_sp6_forw, ae1_sp6[(promoters_SP6$TSS[i]-150):(promoters_SP6$TSS[i]+50)])
+  full_size_sp6_forw<-rbind(full_size_sp6_forw, size1_sp6[(promoters_SP6$TSS[i]-150):(promoters_SP6$TSS[i]+50)])
+  full_taus_sp6_forw<-rbind(full_taus_sp6_forw, taus1_sp6[(promoters_SP6$TSS[i]-150):(promoters_SP6$TSS[i]+50)])
+  full_c_sp6_forw<-rbind(full_c_sp6_forw, c1_sp6[(promoters_SP6$TSS[i]-150):(promoters_SP6$TSS[i]+50)])
+  full_gc_sp6_forw<-rbind(full_gc_sp6_forw, gc1_sp6[(promoters_SP6$TSS[i]-150):(promoters_SP6$TSS[i]+50)])
+}
+
+full_taus_sp6_forw<-normalize(full_taus_sp6_forw, byrow = T)
+full_c_sp6_forw<-normalize(full_c_sp6_forw, byrow =  T)
+full_gc_sp6_forw<-normalize
+```
+
+#Activation energy
+
+
+```{r eval=F}
+XX<-(-150:50)
+plot(XX,full_ae_sp6_forw[1,], type='n',  ylim=range(full_ae_sp6_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for total set of sp6 promoters\n (consensus sequence region is highlightened)', panel.first=c(rect(-17, min(full_ae_sp6_forw)-10, -5, max(full_ae_sp6_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_sp6_forw)-10, 5, max(full_ae_sp6_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in seq_along(promoters_SP6$TSS)) {
+  lines(XX, full_ae_sp6_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=-5, lty=3, col='red', lwd=3)
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_sp6_forw))[early]), border = F, bg = "white")
+
+plot(XX,full_ae_sp6_forw[1,], type='n',  ylim=range(full_ae_sp6_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for early promoters', panel.first=c(rect(-17, min(full_ae_sp6_forw)-10, -5, max(full_ae_sp6_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_sp6_forw)-10, 5, max(full_ae_sp6_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in early) {
+  lines(XX, full_ae_sp6_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[early]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_sp6_forw))[early]), border = F, bg = "white")
+
+
+plot(XX, full_ae_sp6_forw[1,], type='n',   ylim=range(full_ae_sp6_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for class II promoters', panel.first=c(rect(-17, min(full_ae_sp6_forw)-10, -5, max(full_ae_sp6_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_sp6_forw)-10, 5, max(full_ae_sp6_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in classII) {
+  lines(XX, full_ae_sp6_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_sp6_forw))[classII]), border = F, bg = "white")
+
+
+plot(XX, full_ae_sp6_forw[1,], type='n',  ylim=range(full_ae_sp6_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for class III promoters', , panel.first=c(rect(-17, min(full_ae_sp6_forw)-10, -5, max(full_ae_sp6_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_sp6_forw)-10, 5, max(full_ae_sp6_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in classIII) {
+  lines(XX, full_ae_sp6_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_sp6_forw))[classIII]), border = F, bg = "white")
+
+```
+
+
+#size
+
+```{r}
+
+plot(XX,full_size_sp6_forw[1,], type='n',  ylim=range(full_size_sp6_forw), xlab='Sequence', ylab='Size of OS', main='Size of OS profiles for total set of sp6 promoters',  panel.first=c(rect(-17, min(full_size_sp6_forw)-10, -5, max(full_size_sp6_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_size_sp6_forw)-10, 5, max(full_size_sp6_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in seq_along(promoters_SP6$TSS)) {
+  lines(XX, full_size_sp6_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[early], border = F, bg = "white")
+
+plot(XX,full_size_t7_forw[1,], type='n',  ylim=c(8.5,10.5), xlab='Sequence', ylab='Size of OS', main='Size of OS profiles for early promoters',  panel.first=c(rect(-17, min(full_size_t7_forw)-10, -5, max(full_size_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_size_t7_forw)-10, 5, max(full_size_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+abline(v=0, lty=2)
+for (i in early) {
+  lines(XX, full_size_t7_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[early]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[early], border = F, bg = "white")
+
+
+plot(XX, full_size_t7_forw[1,], type='n',  ylim=c(8.5,10.5), xlab='Sequence', ylab='Size of OS', main='Size of OS profiles for class II promoters',  panel.first=c(rect(-17, min(full_size_t7_forw)-10, -5, max(full_size_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_size_t7_forw)-10, 5, max(full_size_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+abline(v=0, lty=2)
+for (i in classII) {
+  lines(XX, full_size_t7_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_t7_forw))[classII]), border = F, bg = "white")
+
+
+plot(XX, full_size_t7_forw[1,], type='n',  ylim=c(8.5,10.5), xlab='Sequence', ylab='Size of OS', main='Size of OS profiles for class III promoters',  panel.first=c(rect(-17, min(full_size_t7_forw)-10, -5, max(full_size_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_size_t7_forw)-10, 5, max(full_size_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+abline(v=0, lty=2)
+for (i in classIII) {
+  lines(XX, full_size_t7_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_t7_forw))[classIII]), border = F, bg = "white")
+```
+
+
+
+#Dynamical characteristics data - for mutated T7 genome with insertions of 23 b.p. promoter consensus in randam sites
+
+```{r}
+consensus23bp<-'TAATACGACTCACTATAGGGAGA'
+set.seed(2510)
+rand_sites <- sample(0:nchar(t7_genome_string), nrow(promoters), replace=T)
+
+
+mutated_t7_genome_string<-t7_genome_string
+for (i in rand_sites) {
+        substr(mutated_t7_genome_string, i-17, i+5)<-consensus23bp
+}
+
+#dir.create('mutated_t7_dynamic_characteristics')
+
+```
+
+Additionally data on 200 b.p.-long sliding window GC-content are loaded.
+```{r}
+setwd(paste0(wd, '/mutated_t7_dynamic_characteristics/'))
+
+#ae1_t7<-readMat(paste0(wd, '/mutated_t7_dynamic_characteristics/', 'mutated_T7_full.mat'))$E01
+#size1_t7<-readMat(paste0(wd, '/mutated_t7_dynamic_characteristics/', 'mutated_T7_full.mat'))$d1
+#taus1_t7<-readMat(paste0(wd, '/mutated_t7_dynamic_characteristics/', 'mutated_T7_full.mat'))$taus1
+#c1_t7<-readMat(paste0(wd, '/mutated_t7_dynamic_characteristics/', 'mutated_T7_full.mat'))$c1
+#gc1_t7<-readMat(paste0(wd, '/mutated_t7_dynamic_characteristics/', 'mutated_T7_full.mat'))$gc
+ae1_mutt7 <- dynchars(unlist(strsplit(mutated_t7_genome_string, '')), 11)$E01
+size1_mutt7 <-  dynchars(unlist(strsplit(mutated_t7_genome_string, '')), 11)$d1
+
+for (i in c('ae', 'size', 'taus', 'gc', 'c')){
+  assign(paste0('full_', i, '_t7_forw'), c())
+}
+
+for (i in seq_along(rand_sites)) {
+  full_ae_t7_forw<-rbind(full_ae_t7_forw, ae1_mutt7[(rand_sites[i]-150):(rand_sites[i]+50)])
+  full_size_t7_forw<-rbind(full_size_t7_forw, size1_mutt7[(rand_sites[i]-150):(rand_sites[i]+50)])
+  #full_taus_t7_forw<-rbind(full_taus_t7_forw, taus1_t7[(rand_sites[i]-150):(rand_sites[i]+50)])
+  #full_c_t7_forw<-rbind(full_c_t7_forw, c1_t7[(rand_sites[i]-150):(rand_sites[i]+50)])
+  #full_gc_t7_forw<-rbind(full_gc_t7_forw, gc1_t7[(rand_sites[i]-150):(rand_sites[i]+50)])
+}
+
+#full_taus_t7_forw<-normalize(full_taus_t7_forw, byrow = T)
+#full_c_t7_forw<-normalize(full_c_t7_forw, byrow =  T)
+#full_gc_t7_forw<-normalize(full_gc_t7_forw, byrow =  T)
+
+```
+
+#Activation energy
+
+
+```{r}
+XX<-(-150:50)
+plot(XX,full_ae_t7_forw[1,], type='n',  ylim=range(full_ae_t7_forw), xlab='Sequence', ylab='Activation energy', main='Activation energy profiles for \n random T7 genome fragment with inserted consensus sequence \n (consensus sequence region is highlightened)', panel.first=c(rect(-17, min(full_ae_t7_forw)-10, -5, max(full_ae_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_t7_forw)-10, 5, max(full_ae_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in seq_along(rand_sites)) {
+  lines(XX, full_ae_t7_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=-5, lty=3, col='red', lwd=3)
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(paste0('Random site (pseudo-TSS at ', rand_sites, ')')), cex =0.5, lty = c(1,1), lwd=1,  col =col_all, border = F, bg = "white")
+
+```
+
+
+#size
+
+```{r}
+plot(XX,full_size_t7_forw[1,], type='n',  ylim=range(full_size_t7_forw), xlab='Sequence', ylab='Size of OS', main='Size of OS profiles for \n random T7 genome fragment with inserted consensus sequence \n (consensus sequence region is highlightened)',  panel.first=c(rect(-17, min(full_size_t7_forw)-10, -5, max(full_size_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_size_t7_forw)-10, 5, max(full_size_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in seq_along(rand_sites)) {
+  lines(XX, full_size_t7_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(paste0('Random site (pseudo-TSS at ', rand_sites, ')')), cex =0.5, lty = c(1,1), lwd=1,  col =col_all, border = F, bg = "white")
+```
+
+
+#bendability profiles calculated using `reldna` package
+
+##for complete T7 genome
+
+```{r}
+bend_full_sp6<-bendability(sp6_genome_string, bound=c(50, nchar(sp6_genome_string)-50), width=200)
+plot(bend_full_sp6, type='l')
+```
+
+##for promoter regions
+
+```{r}
+bend_proms_sp6<-c()
+for(i in promoters_SP6$TSS) {
+  bend_proms_sp6<-cbind(bend_proms_sp6, bendability(substr(sp6_genome_string, i-200, i+100), bound=c(50, 250), width=1) )
+}
+```
+
+##plotting bendability for promoter regions profiles
+
+
+```{r}
+plot(XX, bend_proms_sp6[,1],ty='n', ylim=range(bend_proms_sp6), main='Bendability profiles for complete set of sp6 promoters', xlab='Sequence (b.p.)', ylab='Bendability', panel.first=c(rect(-17, min(bend_proms_sp6)-10, -5, max(bend_proms_sp6)+10, col = 'aliceblue', border=F), rect(-5, min(bend_proms_sp6)-10, 5, max(bend_proms_sp6)+10, col = 'papayawhip', border=F)), cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+abline(v=-35*-4:4, lty=3, col='grey' )
+abline(v=0, lty=3, col='red', lwd=2)
+for (i in seq_along(promoters_SP6$TSS)) {
+    lines(XX, bend_proms_sp6[,i],ty='l', lwd=1, col=rainbow(length(promoters_SP6$TSS))[i])
+}
+legend('topleft', as.character(promoters_SP6$Name), cex =0.5, lty = c(1,1), lwd=1,  col =rainbow(length(promoters_SP6$TSS)), border = F, bg = "white")
+
+#by one
+par(mfrow=c(3,4))
+for (i in seq_along(promoters_SP6$TSS)) {
+    plot(XX, bend_proms_sp6[,i],ty='l', lwd=1, col=rainbow(length(promoters_SP6$TSS))[i])
+}
+par(mfrow=c(2,1))
+
+plot(XX, bend_proms_sp6[,1],ty='n', ylim=range(bend_proms_sp6), panel.first=c(rect(-17, min(bend_proms_sp6)-10, -5, max(bend_proms_sp6)+10, col = 'aliceblue', border=F), rect(-5, min(bend_proms_sp6)-10, 5, max(bend_proms_sp6)+10, col = 'papayawhip', border=F)), cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+abline(v=-35*-4:4, lty=3, col='grey' )
+abline(v=0, lty=3, col='red', lwd=2)
+for (i in 1:7) {
+    lines(XX, bend_proms_sp6[,i],ty='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[1:7]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[1:7], border = F, bg = "white")
+
+plot(XX, bend_proms_sp6[,1],ty='n', ylim=range(bend_proms_sp6), panel.first=c(rect(-17, min(bend_proms_sp6)-10, -5, max(bend_proms_sp6)+10, col = 'aliceblue', border=F), rect(-5, min(bend_proms_sp6)-10, 5, max(bend_proms_sp6)+10, col = 'papayawhip', border=F)), cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+abline(v=-35*-4:4, lty=3, col='grey' )
+abline(v=0, lty=3, col='red', lwd=2)
+for (i in 8:10) {
+    lines(XX, bend_proms_sp6[,i],ty='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters_SP6$Name[8:10]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[8:10], border = F, bg = "white")
+#    bend_polyA<-bendability(consensus_polyA, bound=c(500, 1500), width=200)
+ #   bend_polyT<-bendability(consensus_polyT, bound=c(500, 1500), width=200)
+
+```
+
+
+#GC3 evaluation
+
+#to plot t7 and sp6 together
+
+
+```{r}
+svg('/home/mikhail/Documents/t7/SP6_all_promoter_variants/t7_and_sp6_promoters_mpots.svg', width=14,height=7)
+par(mfrow=c(2,2))
+
+
+col_all<-c(col_early, col_classII, col_classIII)
+
+X201<--100:100
+#run t7 script first!!
+plot(X201, mpots_t7[1,(150-100):(150+100)], type='n', ylim=range(mpots_t7), lwd=0.01, main='Electrostatic potential profiles\n for T7 class II promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in classII){
+  lines(X201, mpots_t7[i,(150-100):(150+100)], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classII], border = F, bg = "white")
+
+plot(X201, mpots_t7[1,(150-100):(150+100)], type='n', ylim=range(mpots_t7), lwd=0.01, main='Electrostatic potential profiles\n for T7 class III promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in classIII){
+  lines(X201, mpots_t7[i,(150-100):(150+100)], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classIII], border = F, bg = "white")
+
+
+
+
+plot(X201, mpots_sp6[1,(150-100):(150+100)], type='n', ylim=range(mpots_sp6), lwd=0.01, main='Electrostatic potential profiles\n for SP6 metabolism promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in metabolic){
+  lines(X201, mpots_sp6[i,(150-100):(150+100)], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters_SP6$Name[metabolic]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[metabolic], border = F, bg = "white")
+
+plot(X201, mpots_sp6[1,(150-100):(150+100)], type='n', ylim=range(mpots_sp6), lwd=0.01, main='Electrostatic potential profiles\n for SP6 structural promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in structural){
+  lines(X201, mpots_sp6[i,(150-100):(150+100)], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters_SP6$Name[structural]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[structural], border = F, bg = "white")
+
+dev.off()
+```
+
+
+#to plot togethet bendability for t7 and sp6
+
+```{r}
+svg('/home/mikhail/Documents/t7/SP6_all_promoter_variants/t7_and_sp6_promoters_bends.svg', width=14,height=7)
+par(mfrow=c(2,2))
+###XX<-110:170
+XX<--30:30
+
+
+plot(XX, bend_proms_t7[110:170,1],ty='n', ylim=range(bend_proms_t7),  main='Bendability profiles\n for T7 class II promoters', xlab='Sequence (nts)', ylab='Bendability value', panel.first=c(rect(-17, min(bend_proms_t7)-10, -5, max(bend_proms_t7)+10, col = 'aliceblue', border=F), rect(-5, min(bend_proms_t7)-10, 5, max(bend_proms_t7)+10, col = 'papayawhip', border=F)), cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+abline(v=-35*-4:4, lty=3, col='grey' )
+abline(v=0, lty=3, col='red', lwd=2)
+for (i in classII) {
+    lines(XX, bend_proms_t7[110:170,i],ty='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classII], border = F, bg = "white")
+
+plot(XX, bend_proms_t7[110:170,1],ty='n', ylim=range(bend_proms_t7),  main='Bendability profiles\n for T7 class III promoters', xlab='Sequence (nts)', ylab='Bendability value', panel.first=c(rect(-17, min(bend_proms_t7)-10, -5, max(bend_proms_t7)+10, col = 'aliceblue', border=F), rect(-5, min(bend_proms_t7)-10, 5, max(bend_proms_t7)+10, col = 'papayawhip', border=F)), cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+abline(v=-35*-4:4, lty=3, col='grey' )
+abline(v=0, lty=3, col='red', lwd=2)
+for (i in classIII) {
+    lines(XX, bend_proms_t7[110:170,i],ty='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classIII], border = F, bg = "white")
+
+plot(XX, bend_proms_sp6[110:170,1],ty='n', ylim=range(bend_proms_sp6), main='Bendability profiles\n for SP6 metabolic promoters', xlab='Sequence (nts)', ylab='Bendability value', panel.first=c(rect(-17, min(bend_proms_sp6)-10, -5, max(bend_proms_sp6)+10, col = 'aliceblue', border=F), rect(-5, min(bend_proms_sp6)-10, 5, max(bend_proms_sp6)+10, col = 'papayawhip', border=F)), cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+abline(v=-35*-4:4, lty=3, col='grey' )
+abline(v=0, lty=3, col='red', lwd=2)
+for (i in metabolic) {
+    lines(XX, bend_proms_sp6[110:170,i],ty='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters_SP6$Name[metabolic]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classII], border = F, bg = "white")
+
+plot(XX, bend_proms_sp6[110:170,1],ty='n', ylim=range(bend_proms_sp6),  main='Bendability profiles\n for SP6 structural promoters', xlab='Sequence (nts)', ylab='Bendability value', panel.first=c(rect(-17, min(bend_proms_sp6)-10, -5, max(bend_proms_sp6)+10, col = 'aliceblue', border=F), rect(-5, min(bend_proms_sp6)-10, 5, max(bend_proms_sp6)+10, col = 'papayawhip', border=F)), cex.lab=1.5, cex.axis=1.5, cex.main=1.5, cex.sub=1.5)
+abline(v=-35*-4:4, lty=3, col='grey' )
+abline(v=0, lty=3, col='red', lwd=2)
+for (i in structural) {
+    lines(XX, bend_proms_sp6[110:170,i],ty='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters_SP6$Name[structural]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classIII], border = F, bg = "white")
+#    bend_polyA<-bendability(consensus_polyA, bound=c(500, 1500), width=200)
+ #   bend_polyT<-bendability(consensus_polyT, bound=c(500, 1500), width=200)
+
+
+dev.off()
+```
+```{r}
+svg('/home/mikhail/Documents/t7/SP6_all_promoter_variants/t7_and_sp6_promoters_sidd_sist.svg', width=14,height=7)
+par(mfrow=c(2,2))
+###XX<-110:170
+
+plot(X750, full_p_sist_t7[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for class II promoters')
+abline(v=0, lty=2)
+for (i in classII) {
+  lines(X750, full_p_sist_t7[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classII], border = F, bg = "white")
+
+
+plot(X750, full_p_sist_t7[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability',  main='SIDD profiles for class III promoters')
+abline(v=0, lty=2)
+for (i in classIII) {
+  lines(X750, full_p_sist_t7[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classIII], border = F, bg = "white")
+
+
+
+plot(X750,full_p_sist_sp6[1, X750_plot], type='n', lwd=0.001, ylim=c(0, 1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for SP6 metabolic promoters')
+abline(v=0, lty=2)
+for (i in metabolic) {
+  lines(X750, full_p_sist_sp6[i,X750_plot], type='l', lwd=1 , col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[metabolic]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[metabolic], border = F, bg = "white")
+
+
+plot(X750, full_p_sist_sp6[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for SP6 structural promoters')
+abline(v=0, lty=2)
+for (i in structural) {
+  lines(X750, full_p_sist_sp6[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[structural]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[structural], border = F, bg = "white")
+dev.off()
+```
+
+
+##T4
+
+```{r message=FALSE}
+library(gtools)
+library(plyr)
+library(R.matlab)
+library(seqinr)
+library(reldna)
+library(Biostrings)
+library(RColorBrewer)
+
+library(som)
+
+wd<-getwd()
+```
+Data on promoters and T7 bacteriophage genome used in previous work (accession NC_001604) are loaded. The genome is converted to a plain string format since there is no need is Bioconductor packages.   Promoters are partitioned in classes (early, II, III).
+```{r echo=TRUE}
+promoters_SP6<-c()
+promoters_SP6$TSS<-c(6135, 8428, 9129, 12559, 13022, 14303, 17445, 22430, 37790, 39927)
+promoters_SP6$Name<-paste0('SP6_Promoter_', 1:length(promoters_SP6$TSS))
+##load('NC_001604.1.rda')
+sp6_genome_string<-paste0(sp6gb, collapse='')
+
+#unknown<-c(1,23)
+#early<-2:10
+#classII<-11:17
+#classIII<-c(18:22,24)
+
+#gene (and promoters) partition (from genome map)
+metabolic<-1:7
+structural<-8:10
+```
+
+Utility directories to store promoter sequencs in string and numerical form are created (if not present)
+```{r echo=FALSE}
+#case for genome in string form
+
+dirs<-c('Perl_sist_output', 'sp6_genome_parts_string', 'BZ_transition_Perl_sist_output_pSV2_variants')
+
+for (i in dirs) {
+  if (file.exists(i)) {
+    unlink(i, recursive = T)
+  } 
+}
+
+for (i in dirs) {
+  dir.create(i)
+} 
+```
+
+
+Two sets of string are obtained for promoter sequences (750 b.p. in both directions from TST intervals for further SIDD calculation online using WebSIDD and [-200;100] b.p. - for electrostatic optential (EP) calculation). For SIDD calculation using Octave script the sequences are conversed into numerical form,  [-1000;1000] b.p. intervals are taken. All the resulting data are stored in corresponding directories.
+```{r tidy=TRUE}
+
+#t7_promoters_num<-c()
+substrs_to_mpots_sp6<-list()
+
+for (i in promoters_SP6$TSS) {
+  s<-i-1000
+  if (s<0) {s<-0} 
+  f<-i+1000
+  if (f>nchar(sp6_genome_string)) {f<-nchar(sp6_genome_string)} 
+  write.fasta(substr(sp6_genome_string, s, f), names=NULL, file.out = paste0(wd, '/sp6_genome_parts_string/sp6_', s,'_', f, '.fasta'))
+    # #writeLines(substr(t7_genome_string, s, f), con = paste0(wd, '/t7_genome_parts_string/t7_', s,'_', f, '.txt'))
+
+#  s<-i-1000
+ # if (s<0) {s<-0} 
+  #f<-i+1000
+  #if (f>nchar(t7_genome_string)) {f<-nchar(t7_genome_string)} 
+  #write.fasta(substr(t7_genome_string, s, f), names=NULL, file.out = paste0(wd, '/t7_genome_parts_string/t7_', s,'_', f, '.fasta'))
+  #assign(paste0('num_t7_genome_',s,'_',f), t(str2n(substr(t7_genome_string, s, f))))
+  #t7_promoters_num<-rbind(t7_promoters_num, s2n(substr(t7_genome_string, s, f)))
+  #write.table(t(str2n(substr(t7_genome_string, s, f))), file=paste0(wd, '/Promoters_t7_numerical_form/Promoters_t7_numerical_', i), append = FALSE, quote = FALSE, sep = "",
+   #           row.names = FALSE,
+    #          col.names = FALSE)
+  
+  s_mpot<-i-200
+  f_mpot<-i+100
+  #write.fasta(substr(t7_genome_string, s_mpot, f_mpot), names=NULL, file.out = paste0(wd, '/t7_genome_parts_string_mpot/t7_', s_mpot,'_', f_mpot, '.fasta'))
+  substrs_to_mpots_sp6<-c(substrs_to_mpots_sp6, substr(sp6_genome_string, s_mpot, f_mpot))
+  #assign(paste0('t7_genome_mpot',s_mpot,'_',f_mpot), substr(t7_genome_string, s_mpot, f_mpot))
+}
+```
+Clusterization together
+```{r}
+library(fastcluster)
+library(dendextend)
+
+col4groups<-c(rep('lightblue', 7), rep('darkblue', 6), rep('lightsalmon', 8), rep('darkred', 4))
+
+# #par(mfrow=c(2,1))
+mpots_t7_sp6<-rbind(mpots_t7 [-c(early, 1, 23),], mpots_sp6)[,(150-35):(150+15)] ###no early 
+rownames(mpots_t7_sp6)<-c(as.character(promoters$Name[-c(early, 1, 23)]),as.character(promoters_SP6$Name))
+hclust_mpots_t7_sp6<-as.dendrogram(hclust.vector(mpots_t7_sp6, method = 'ward'))
+
+color_hclust_mpots_t7_sp6<-color_branches(as.dendrogram(hclust_mpots_t7_sp6), k=nrow(mpots_t7_sp6), col =  c(rep('cadetblue', 7), rep('navy',6), rep('lightsalmon', 7), rep('coral4', 3))[order.dendrogram(as.dendrogram(hclust_mpots_t7_sp6))])
+
+#color_hclust_mpots_t7_sp6<-color_branches(hclust_mpots_t7_sp6, k=nrow(mpots_t7_sp6), col = col4groups [order.dendrogram(as.dendrogram(hclust_mpots_t7_sp6))])
+
+color_hclust_mpots_t7_sp6%>%set('branches_lwd', 4)%>%plot
+#%>%set("branches_lty", c(rep(1, 7), rep(2, 6), rep(1, 7), rep(2, 3)))%>%plot
+
+
+bends_t7_sp6<-rbind(t(bend_proms_t7)[-c(early, 1, 23),], t(bend_proms_sp6))[,(150-35):(150+15)]#[,120:60]
+rownames(bends_t7_sp6)<-c(as.character(promoters$Name[-c(early, 1, 23)]),as.character(promoters_SP6$Name))
+
+hclust_bends_t7_sp6<-hclust.vector(bends_t7_sp6, method = 'ward')
+
+color_hclust_bends_t7_sp6<-color_branches(as.dendrogram(hclust_bends_t7_sp6), k=nrow(bends_t7_sp6), col =  c(rep('cadetblue', 7), rep('navy',6), rep('lightsalmon', 7), rep('coral4', 3))[order.dendrogram(as.dendrogram(hclust_bends_t7_sp6))])
+color_hclust_bends_t7_sp6%>%set('branches_lwd', 4)%>%plot
+
+
+tanglegram(color_hclust_mpots_t7_sp6, color_hclust_bends_t7_sp6, sort = T, intersecting = T , color_lines = (topo.colors(23)), main_left = 'EP clusterization', main_right =  'Bendability clusterization')
+mtext('T7 promoters in red, SP6 - in blue;\n metabolic in solid, structral in dotted', 3, 2,2)
+
+untangle(tanglegram(color_hclust_mpots_t7_sp6, color_hclust_bends_t7_sp6, sort = T, intersecting = T), color_lines = (topo.colors(23)), main_left = 'EP clusterization', main_right =  'Bendability clusterization')%>%plot
+
+
+```
+
+```{r Clusterization of separate phages profiles}
+# #par(mfrow=c(2,1))
+mpots_t7_to_clust<-mpots_t7 [-c(1, 23, early), (150-35):(150+15)]#[,120:60] no early 
+mpots_sp6_to_clust<-mpots_sp6 [, (150-35):(150+15)]
+rownames(mpots_t7_to_clust)<-as.character(promoters$Name[-c(1, 23, early)])
+rownames(mpots_sp6_to_clust)<-as.character(promoters_SP6$Name)
+hclust_mpots_t7<-hclust.vector(mpots_t7_to_clust, method = 'ward')
+hclust_mpots_sp6<-hclust.vector(mpots_sp6_to_clust, method = 'ward')
+
+
+color_hclust_mpots_t7<-color_branches(as.dendrogram(hclust_mpots_t7), k=nrow(mpots_t7_to_clust), col =  c(rep('cadetblue', 7), rep('coral4', 6))[order.dendrogram(as.dendrogram(hclust_mpots_t7))])
+
+color_hclust_mpots_sp6<-color_branches(as.dendrogram(hclust_mpots_sp6), k=nrow(mpots_sp6_to_clust), col =  c(rep('cadetblue', 7), rep('coral4', 6))[order.dendrogram(as.dendrogram(hclust_mpots_sp6))])
+
+color_hclust_mpots_t7%>%set('branches_lwd', 4)%>%plot
+color_hclust_mpots_sp6%>%set('branches_lwd', 4)%>%plot
+
+#cut at
+k=4
+cut_hclust_mpots_sp6<-cutree(hclust_mpots_sp6, k=k)
+m <- rbind(rep(1, k), c(2:(k+1)))
+layout(m)
+par(mar = c(3, 3, 0, 0))
+
+#par(mfrow=c(2,3))
+plot(color_hclust_mpots_sp6)
+abline()
+for (i in unique(cut_hclust_mpots_sp6)[c(4,2,3,1)]) {
+  if (class(mpots_sp6[which(cut_hclust_mpots_sp6==i),])=='numeric') {
+    plot((mpots_sp6[which(cut_hclust_mpots_sp6==i),]), type='l', col=i*2, main=paste0('SP6 promoters', which(cut_hclust_mpots_sp6==i)))
+  } else {
+
+matplot(t(mpots_sp6[which(cut_hclust_mpots_sp6==i),]), type='l', col=i*2, main=paste0('SP6 promoters', which(cut_hclust_mpots_sp6==i)))
+  }
+print(c(i, names(which(cut_hclust_mpots_sp6==i))))
+}
+
+
+#cut at
+k=4
+cut_hclust_mpots_sp6<-cutree(hclust_mpots_sp6, k=k)
+m <- rbind(rep(1, k), c(2:(k+1)))
+layout(m)
+par(mar = c(3, 3, 0, 0))
+
+#par(mfrow=c(2,3))
+plot(color_hclust_mpots_sp6)
+abline()
+for (i in unique(cut_hclust_mpots_sp6)[c(4,2,3,1)]) {
+  if (class(mpots_sp6[which(cut_hclust_mpots_sp6==i),])=='numeric') {
+    plot((mpots_sp6[which(cut_hclust_mpots_sp6==i),]), type='l', col=i*2, main=paste0('SP6 promoters', which(cut_hclust_mpots_sp6==i)))
+  } else {
+
+matplot(t(mpots_sp6[which(cut_hclust_mpots_sp6==i),]), type='l', col=i*2, main=paste0('SP6 promoters', which(cut_hclust_mpots_sp6==i)))
+  }
+print(c(i, names(which(cut_hclust_mpots_sp6==i))))
+}
+
+
+
+bends_t7_to_clust<-t(bend_proms_t7) [-c(1, 23, early),(150-35):(150+15)]#[,120:60] ###no early 
+bends_sp6_to_clust<-t(bend_proms_sp6) [,(150-35):(150+15)]
+rownames(bends_t7_to_clust)<-as.character(promoters$Name[-c(1, 23, early)])
+rownames(bends_sp6_to_clust)<-as.character(promoters_SP6$Name)
+hclust_bends_t7<-hclust.vector(bends_t7_to_clust, method = 'ward')
+hclust_bends_sp6<-hclust.vector(bends_sp6_to_clust, method = 'ward')
+
+color_hclust_bends_t7<-color_branches(as.dendrogram(hclust_bends_t7), k=nrow(bends_t7_to_clust), col =  c(rep('cadetblue', 7), rep('coral4', 6))[order.dendrogram(as.dendrogram(hclust_bends_t7))])
+
+color_hclust_bends_sp6<-color_branches(as.dendrogram(hclust_bends_sp6), k=nrow(bends_sp6_to_clust), col =  c(rep('cadetblue', 7), rep('coral4', 6))[order.dendrogram(as.dendrogram(hclust_bends_sp6))])
+
+color_hclust_bends_t7%>%set('branches_lwd', 4)%>%plot
+color_hclust_bends_sp6%>%set('branches_lwd', 4)%>%plot
+
+tanglegram(color_hclust_mpots_t7, color_hclust_bends_t7, sort = T, intersecting = T )
+tanglegram(color_hclust_mpots_sp6, color_hclust_bends_sp6, sort = T, intersecting = T )
+
+```
+clusters profiles
+```{r}
+#separately
+
+
+k=3
+cut_hclust_mpots_t7<-cutree(hclust_mpots_t7, k=k)
+m <- rbind(rep(1,3), c(2:(k+1)))
+layout(m)
+par(mar = c(2, 2, 2, 2))
+
+plot(color_hclust_mpots_t7, main='T7-specific promoters bendability profiles')
+X<--35:15
+for (i in unique(cut_hclust_mpots_t7)[c(1,3,2)]) {
+  matplot(X, t(mpots_t7_to_clust[which(cut_hclust_mpots_t7==i),]), type='l', col=c(rep('navy', 7),rep('darkred', 6))[which(cut_hclust_mpots_t7==i)], ylim=range(mpots_t7_to_clust))
+  abline(v=0, lty=2)
+print(c(i, names(which(cut_hclust_mpots_t7==i))))
+}
+
+
+k=2
+cut_hclust_bends_t7<-cutree(hclust_bends_t7, k=2)
+m <- rbind(c(1,1), c(2,3))
+layout(m)
+par(mar = c(2, 2, 2, 2))
+
+plot(color_hclust_bends_t7, main='T7-specific promoters bendability profiles')
+X<--35:15
+for (i in rev(unique(cut_hclust_bends_t7))) {
+  matplot(X, t(bends_t7_to_clust[which(cut_hclust_bends_t7==i),]), type='l', col=c(rep('navy', 7),rep('darkred', 6))[which(cut_hclust_bends_t7==i)], ylim=range(bends_t7_to_clust))
+  abline(v=0, lty=2)
+print(c(i, names(which(cut_hclust_bends_t7==i))))
+}
+
+
+k=3
+cut_hclust_mpots_sp6<-cutree(hclust_mpots_sp6, k=k)
+m <- rbind(rep(1,3), c(2:(k+1)))
+layout(m)
+par(mar = c(2, 2, 2, 2))
+
+plot(color_hclust_mpots_sp6, main='SP6-specific promoters EP profiles')
+X<--35:15
+for (i in unique(cut_hclust_mpots_sp6)) {
+  matplot(X, t(mpots_sp6_to_clust[which(cut_hclust_mpots_sp6==i),]), type='l', col=c(rep('navy', 7),rep('darkred', 6))[which(cut_hclust_mpots_sp6==i)], ylim=range(mpots_sp6_to_clust))
+  abline(v=0, lty=2)
+print(c(i, names(which(cut_hclust_mpots_sp6==i))))
+}
+
+
+k=2
+cut_hclust_bends_sp6<-cutree(hclust_bends_sp6, k=k)
+m <- rbind(rep(1,k), c(2:(k+1)))
+layout(m)
+par(mar = c(2, 2, 2, 2))
+
+plot(color_hclust_bends_sp6, main='SP6-specific promoters bendability profiles')
+X<--35:15
+for (i in unique(cut_hclust_bends_sp6)[c(1,2)]) {
+  matplot(X, t(bends_sp6_to_clust[which(cut_hclust_bends_sp6==i),]), type='l', col=c(rep('navy', 7),rep('darkred', 6))[which(cut_hclust_bends_sp6==i)], ylim=range(bends_sp6_to_clust))
+  abline(v=0, lty=2)
+print(c(i, names(which(cut_hclust_bends_sp6==i))))
+}
+
+
+
+#togethret
+cut_hclust_mpots_t7_sp6<-cutree(hclust_mpots_t7_sp6, k=4)
+par(mfrow=c(2,3))
+for (i in unique(cut_hclust_mpots_t7_sp6)) {
+  
+matplot(t(mpots_t7_sp6[which(cut_hclust_mpots_t7_sp6==i),]), type='l', col=col4groups[which(cut_hclust_mpots_t7_sp6==i)])
+print(c(i, names(which(cut_hclust_mpots_t7_sp6==i))))
+}
+
+
+
+cut_hclust_bends_t7_sp6<-cutree(hclust_bends_t7_sp6, k=4)
+par(mfrow=c(2,3))
+for (i in unique(cut_hclust_bends_t7_sp6)) {
+  
+matplot(t(bends_t7_sp6[which(cut_hclust_bends_t7_sp6==i),]), type='l', col=col4groups[which(cut_hclust_bends_t7_sp6==i)])
+print(c(i, names(which(cut_hclust_bends_t7_sp6==i))))
+
+}
+
+```
+
+
+#Profiles for whole genomes
+
+```{r Whole phages profiles}
+
+library(ape)
+
+t7gb<-read.GenBank(access.nb = 'NC_001604', as.character = T) 
+t7gb<-t7gb$NC_001604
+
+sp6gb<-read.GenBank(access.nb = 'NC_004831', as.character = T)
+sp6gb<-sp6gb$NC_004831
+
+t3gb<-read.GenBank(access.nb = 'NC_003298', as.character = T)
+t3gb<-t3gb$NC_003298
+
+phiYeO3_12gb<-read.GenBank(access.nb = 'NC_001271', as.character = T)
+phiYeO3_12gb<-phiYeO3_12gb$NC_001271
+
+phage13a_gb<-read.GenBank(access.nb = 'NC_011045.1', as.character = T)
+phage13a_gb<-phage13a_gb$NC_011045.1
+
+ba14gb<-read.GenBank(access.nb = 'NC_011040.1', as.character = T)
+ba14gb<-ba14gb$NC_011040.1
+
+yepe2gb<-read.GenBank(access.nb = 'NC_011038.1', as.character = T)
+yepe2gb<-yepe2gb$NC_011038.1
+
+k11gb<-read.GenBank(access.nb = 'EU734173.1', as.character = T)
+k11gb<-k11gb$EU734173.1
+
+
+
+
+
+
+
+
+phages<-sort(grep(pattern = '*gb$', ls(), value = T))
+  
+#fucntion to split
+splitWithOverlap <- function(vec, seg.length, overlap) {
+  starts = seq(1, length(vec), by=seg.length-overlap)
+  ends   = starts + seg.length - 1
+  ends[ends > length(vec)] = length(vec)
+
+  lapply(1:length(starts), function(i) vec[starts[i]:ends[i]])
+}
+
+#T7
+for (i in phages) {
+  assign(paste0(i, 'chunks'), splitWithOverlap(get(i), 10000, 2000))
+}
+
+phages_chunks<-sort(grep(pattern = '*gbchunks$', ls(), value = T))
+#t7chunks<-splitWithOverlap(t7gb, 10000, 2000)
+
+#t7chunks<-splitWithOverlap(seq_along(t7gb), 10000, 2000)
+
+dirs <- c('phages_by_10kbp_chunks', 'phages_by_10kbp_sidd', 'phages_by_10kbp_sidd_ionic_0.001')
+
+for (i in dirs) {
+  if (file.exists(paste0('/home/mikhail/Documents/t7/', i))) {
+    unlink(paste0('/home/mikhail/Documents/t7/', i), recursive = T)
+  } else {
+    dir.create(paste0('/home/mikhail/Documents/t7/', i))  
+  }
+}
+
+
+for (i in phages_chunks) {
+  for (j in seq_along(get(i))) {
+    write.fasta(get(i)[[j]], names = NULL, file.out = paste0('/home/mikhail/Documents/t7/phages_by_10kbp_chunks/', i, '_', j))
+  }
+}
+
+
+for (i in phages_chunks) {
+  for (j in seq_along(get(i))) {
+# #aa<-as.character(read.fasta(paste0(wd, '/t7_genome_parts_string/', i), as.string = T, set.attributes = F))
+# #print(substr(aa, nchar(aa)-1000-10, nchar(aa)-1000+1))
+  system(paste0('cd /home/mikhail/Documents/t7/t7_rmd/sist/
+                ',
+                'perl -X master.pl -a M -f /home/mikhail/Documents/t7/phages_by_10kbp_chunks/', i, '_', j, ' -o /home/mikhail/Documents/t7/phages_by_10kbp_sidd/Perl_sist_output_', i, 'no_', j, '.tsv'))
+  }
+}
+#phages_chunks <- phages_chunks[-c(2,5)]
+
+for (i in phages_chunks) {
+  interm<-c()
+  print(i)
+    for (j in seq_along(get(i))) {
+      print(j)
+      if (j==1) {
+      touch<-read.csv(paste0('/home/mikhail/Documents/t7/phages_by_10kbp_sidd/Perl_sist_output_', i, 'no_', j, '.tsv'), sep = '\t', skip = 1)
+      touch<-touch[-(9001:10000),]
+      }
+  else if (j==length(get(i))){
+    
+    if(i=="k11gbchunks") { touch<-read.csv(paste0('/home/mikhail/Documents/t7/phages_by_10kbp_sidd/Perl_sist_output_', i, 'no_', j, '.tsv'), sep = '\t', skip = 1)  #skipping needed since warnong message 'sequence if too short' is present
+    } else {
+    touch<-read.csv(paste0('/home/mikhail/Documents/t7/phages_by_10kbp_sidd/Perl_sist_output_', i, 'no_', j, '.tsv'), sep = '\t')
+    touch<-touch[-(1:1000),]
+      }
+    }
+  else{
+    touch<-read.csv(paste0('/home/mikhail/Documents/t7/phages_by_10kbp_sidd/Perl_sist_output_', i, 'no_', j, '.tsv'),sep = '\t', skip=1)
+    touch<-touch[-c(1:1000, 9001:10000),]
+    } #warnings omitting
+    interm<-rbind(interm, as.matrix(touch))
+    
+    } 
+assign(paste0(i, '_sidd'), interm)
+}
+  
+  
+#SP6
+
+```
+
+
+```{r Plot SIDD for complete T7 DNA}
+par(mfrow=c(2,2))
+
+phages_sidds<-(grep(pattern = '*gbchunks_sidd', ls(), value = T))
+
+
+phiOLs_coords<-c(353+17, ##353..375#ba14
+                479+17, #479..501 #k11 
+                413+17, # 423..445 #13a 
+                 
+                  375+17, #nuccore says 375..397 fo phiYe03-12, TSS at 392 (?) 
+                  NA, #SP6 lacks
+                 366+17, #nuccore 366..388, TSS at 383 for t3
+                 405, #t7
+                 644+17)   ##644..666) #TSS is explicit for t7#yepe2 
+ #ba14 353+17 ##353..375
+#k11 479+17 #479..501
+#13a 413+17 # 423..445
+
+#yepe2 644+17   ##644..666
+
+phiORs_coords<-c(39073+17,   ##39073..39095 #ba14 
+                
+                 40503+17, #40503..40525 #k11  
+                 38159+17, # 38159..38181 #13a
+                  38797+17, #38797..38819 phi...
+                     NA, #sp6
+                 37432+17, # 37432..37454 t3
+                39229, #t7
+   37717+17) #37717..37739)#yepe2
+#ba14 39073+17   ##39073..39095
+#k11 40503+17 #40503..40525
+#13a  38159+17 # 38159..38181
+
+#yepe2 37717+17 #37717..37739
+
+names(phiOLs_coords) <- paste0(phages, '_phiols_coord')
+names(phiORs_coords) <- paste0(phages, '_phiors_coord')
+
+par(mfrow=c(3,3))
+for (i in seq_along(phages_sidds)){
+  plot(get(phages_sidds[i])[,2], type='l', ylim=c(0,1), main=paste0('SIDD profile for complete ', ' ',  toupper(phages[i]), ' ', ' DNA'), ylab='Opening probability', xlab='Sequence (nts)', lwd=1.5)
+  abline(h=0.5, col='grey', lty=3)
+  abline(v=c(phiOLs_coords[i], phiORs_coords[i]), col='red')
+}
+
+
+#plotting phiols and phiors SIDD profiles closer
+#first extending SIDD profiles flanks for plotting by filling with NAs
+extended_phages_sidds <- list()
+for (i in seq_along(phages_sidds)) {
+  extended_phages_sidds[[i]] <- c(rep(NA, 1000), get(phages_sidds[i])[,2], rep(NA, 1000)) 
+}
+X2000 <- -1000:1000
+
+phiols_sidd <- c()
+for (i in c(1,3,4)){ #no SP6
+  phiols_sidd <- rbind(phiols_sidd, extended_phages_sidds[[i]][(phiOLs_coords[i]+1000-1000):(phiOLs_coords[i]+1000+1000)])  #shifting by 1000 nts - extended genome
+}
+
+svg('/home/mikhail/Documents/t7/phiols_and_phiors_for_3_phages.svg', height = 10, width = 10)
+par(mfrow=c(2,2))
+layout(matrix(c(1,2,1,2,3,4), nrow = 3, ncol = 2, byrow = TRUE))
+matplot(X2000, t(phiols_sidd), type='l', lty=1, X2000, xlim=range(X2000), ylim=c(0,1), main='SIDD profiles for phiOL promoters\n of phiYeO3-12, T3, and T7 phages', ylab='Opening probability', xlab='Sequence (nts)', col=c('darkred', 'darkgreen', 'darkblue'), cex.main=2, cex.lab = 1.5)
+  abline(h=0.5, col='grey', lty=3)
+  abline(v=0, col='red', lty=2)
+legend('bottomleft', legend = c('phiYeO3-12', 'T3', 'T7'), col  = c('darkred', 'darkgreen', 'darkblue'), lty=c(1,1,1), cex = 1.5)
+
+phiors_sidd <- c()
+for (i in c(1,3,4)){ #no SP6
+  phiors_sidd <- rbind(phiors_sidd, extended_phages_sidds[[i]][(phiORs_coords[i]+1000-1000):(phiORs_coords[i]+1000+1000)])  #shifting by 1000 nts - extended genome
+}
+
+matplot(X2000, t(phiors_sidd), type='l', lty=1, X2000, xlim=range(X2000), ylim=c(0,1), main='SIDD profiles for phiOR promoters\n of phiYeO3-12, T3, and T7 phages', ylab='', xlab='Sequence (nts)', col=c('darkred', 'darkgreen', 'darkblue'), cex.main=2, cex.lab = 1.5)
+  abline(h=0.5, col='grey', lty=3)
+  abline(v=0, col='red', lty=2)
+legend('bottomleft', legend = c('phiYeO3-12', 'T3', 'T7'), col = c('darkred', 'darkgreen', 'darkblue'), lty=c(1,1,1), cex = 1)
+
+
+#checking primary structure for phiOLs and phiORS
+
+phiols_seqs <- c()
+phiors_seqs <- c()
+
+for (i in c(1,3,4)) { #no sp6 - #2
+  phiols_seqs <- rbind(phiols_seqs, get(phages[i])[(phiOLs_coords[i]-300):(phiOLs_coords[i]+300)])
+  phiors_seqs <- rbind(phiors_seqs, get(phages[i])[(phiORs_coords[i]-300):(phiORs_coords[i]+300)])
+}
+
+#par(mfrow=c(2,1))
+image(as.DNAbin(phiols_seqs[,200:400]), cex.axis = 0.000000000007, cex.lab=2)#, main='phiOL promoters primary structure')
+axis(1, at = 1:ncol(as.DNAbin(phiols_seqs[,200:400])), labels=c(-100, rep(NA,99), 0, rep(NA, 99), 100), tick = FALSE, cex.axis=1.2)
+image(as.DNAbin(phiors_seqs[,200:400]), , cex.axis = 0.000000000007, cex.lab=2)#, main='phiOR promoters primary structure')
+axis(1, at = 1:ncol(as.DNAbin(phiols_seqs[,200:400])), labels=c(-100, rep(NA,99), 0, rep(NA, 99), 100), tick = FALSE, cex.axis=1.2)
+dev.off()
+
+```
+
+```{r Logo for phiORs and phiOLs}
+
+#first get pmw matrix
+library(Biostrings)
+dnass_phiols <- DNAStringSet(c(paste0(phiols_seqs[1,(300-20):(300+20)], collapse = ''),
+                 paste0(phiols_seqs[2,(300-20):(300+20)], collapse = ''),
+                 paste0(phiols_seqs[3,(300-20):(300+20)], collapse = '')))
+
+dnass_phiors <- DNAStringSet(c(paste0(phiors_seqs[1,(300-20):(300+20)], collapse = ''),
+                 paste0(phiors_seqs[2,(300-20):(300+20)], collapse = ''),
+                 paste0(phiors_seqs[3,(300-20):(300+20)], collapse = '')))
+
+#!#consensusMatrix(dnass_phiols)[1:4,]
+#pwm_phiols <- PWM(DNAStringSet(c(paste0(phiols_seqs[1,(300-20):(300+20)], collapse = ''),
+    #             paste0(phiols_seqs[2,(300-20):(300+20)], collapse = ''),
+   #              paste0(phiols_seqs[3,(300-20):(300+20)], collapse = '')))
+  #               , type = c("log2probratio", "prob"),
+ #   prior.params = c(A=0.25, C=0.25, G=0.25, T=0.25))
+
+
+#pwm_phiors <- PWM(DNAStringSet(c(paste0(phiors_seqs[1,(300-20):(300+20)], collapse = ''),
+       #          paste0(phiors_seqs[2,(300-20):(300+20)], collapse = ''),
+      #           paste0(phiors_seqs[3,(300-20):(300+20)], collapse = '')))
+     #            , type = c("log2probratio", "prob"),
+    #prior.params = c(A=0.25, C=0.25, G=0.25, T=0.25))
+
+
+#better to use RWebLogo library
+# Display a sequence logo as an R plot
+#
+# This function will display a sequence logo of an already generated eps sequence logo. 
+#
+# param file path to the eps formatted file of the sequence logo
+# 
+# export
+#  
+# examples
+# # Get path to an example eps sequence logo
+# fpath = system.file("extdata", "example_logo.eps", package="RWebLogo")
+# # Plot it!
+#plotlogo(fpath)
+ plotlogo <- function(file){
+   if(!file.exists(file)){
+     writeLines(sprintf('File "%s" does not exist!', file))
+     return(1)
+   }
+   if(!grepl('.eps$', basename(file))){
+     writeLines(sprintf('The file "%s" must be eps format to plot. To save your logo as in eps format, set the "format" option to "eps" in the weblogo call', file))
+     return(1)
+   }
+   
+   filenew = tempfile(pattern = 'filenew')
+   newps = .ps2ps(file, filenew)
+   
+   outfile = tempfile(pattern = 'outfile')
+   PostScriptTrace(file = filenew, outfilename = outfile)
+   pic = readPicture(outfile)
+   grid.newpage()
+   grid.picture(pic)
+ }
+phiols_rweblogo <- '/home/mikhail/Documents/t7/phiols_for_3_phages_rweblogo.eps'
+weblogo(as.character(dnass_phiols), file.out = phiols_rweblogo, format = 'eps', first.index = -20, stacks.per.line=50, color.scheme='classic')
+plotlogo(phiols_rweblogo)
+weblogo(as.character(dnass_phiors), format = 'svg', first.index = -20, stacks.per.line=50, color.scheme='classic')
+
+
+#define function that divides the frequency by the row sum i.e. proportions
+library(seqLogo)
+proportion <- function(x){
+   rs <- sum(x);
+   return(x / rs);
+}
+##phiols_seqs[,(300-20):(300+20)]
+##phiors_seqs[,(300-20):(300+20)]
+#create position weight matrix
+
+pmw_phiols <- apply(consensusMatrix(dnass_phiols)[1:4,], 2, proportion)
+pmw_phiols <- makePWM(pmw_phiols)
+
+
+pmw_phiors <- apply(consensusMatrix(dnass_phiors)[1:4,], 2, proportion)
+pmw_phiors <- makePWM(pmw_phiors)
+
+
+#need to modify ugly function
+
+library("seqLogo") 
+mySeqLogo = seqLogo::seqLogo 
+bad = (sapply( body(mySeqLogo), "==", "grid.newpage()") | 
+         sapply( body(mySeqLogo), "==", "par(ask = FALSE)"))
+ body(mySeqLogo)[bad] = NULL 
+  norm = function(x) scale(x, center=FALSE, scale=colSums(x)) 
+  grid.newpage() 
+  for(i in 0:3){ 
+    pwm = norm(matrix(runif(32), nrow=4)) 
+    pushViewport(viewport(x=0.2+0.55*(i%%2), 
+                          y=0.2+0.55*(i%/%2), 
+                          width=0.4, height=0.4, 
+                          angle=runif(1, min=-20, max=20))) 
+    mySeqLogo(pwm) 
+    grid.text(sprintf("Hi there %d", i), x=0.5, y=1, 
+              hjust=0.5, vjust=1) 
+    popViewport() 
+    }
+
+postscript("hunchback.eps")
+mySeqLogo(pmw_phiols)
+seqLogo_phiols <- recordPlot()
+mySeqLogo(pmw_phiors)
+seqLogo_phiors <- recordPlot()
+
+library(gridGraphics)
+library(grid)
+dev.new ()
+mySeqLogo(pmw_phiols)
+grid.echo()
+a <- grid.grab()
+
+mySeqLogo(pmw_phiols)
+grid.echo()
+a <- grid.grab()
+
+
+
+#par(mfrow=c(2,1))
+#plot.new()
+#seqLogo_phiols
+#plot.new()
+#seqLogo_phiors
+
+#axis(1, at = 1:ncol(as.DNAbin(phiols_seqs[,200:400])), labels=c(-100, rep(NA,99), 0, rep(NA, 99), 100), tick = FALSE, cex.axis=1.2)
+#dev.off()
+```
+
+```{r}
+#rbPal <- colorRampPalette(c('lightgrey','firebrick'))
+
+#This adds a column of color values
+# based on the y values
+#molten_col <- rbPal(10)[as.numeric(cut(t7gbchunks_sidd[,2],breaks = 10))]
+
+
+plot( t7gbchunks_sidd[,2], type='l', ylim=c(0,1), main='SIDD profile for complete T7 DNA', ylab='Opening probability', xlab='Sequence (nts)', lwd=1.5)
+#abline(v=promoters_SP6$TSS[classIII])
+col_3_classes_t7<-rep(NA, length(promoters$Name))
+
+col_3_classes_t7[early]<-'salmon'
+col_3_classes_t7[classII]<-'darkgreen'
+col_3_classes_t7[classIII]<-'navy'
+
+arrows(x0 = promoters$TSS-1000, x1 = promoters$TSS, y0 = t7gbchunks_sidd[,2][promoters$TSS]+0.5, y1 = t7gbchunks_sidd[,2][promoters$TSS], col = col_3_classes_t7, angle =2 )
+
+text(labels = promoters$Name, x = promoters$TSS-1000, y = t7gbchunks_sidd[,2][promoters$TSS]+0.5, col = col_3_classes_t7, cex=0.7, srt=45)
+
+plot(sp6gbchunks_sidd[,2], type='l', ylim=c(0,1), main='SIDD profile for complete sp6 DNA', ylab='Opening probability', xlab='Sequence (nts)', lwd=1.5)
+#abline(v=promoters_SP6$TSS[classIII])
+
+col_3_classes_sp6<-rep(NA, length(promoters_SP6$Name))
+
+#col_3_classes_sp6[early]<-'salmon'
+col_3_classes_sp6[1:7]<-'darkgreen'
+col_3_classes_sp6[8:10]<-'navy'
+
+arrows(x0 = promoters_SP6$TSS-1000, x1 = promoters_SP6$TSS, y0 = t7gbchunks_sidd[,2][promoters_SP6$TSS]+0.5, y1 = t7gbchunks_sidd[,2][promoters_SP6$TSS], col = col_3_classes_sp6, angle =2 )
+
+text(labels = promoters_SP6$Name, x = promoters_SP6$TSS-1000, y = t7gbchunks_sidd[,2][promoters_SP6$TSS]+0.5, col = col_3_classes_sp6, cex=0.7, srt=45)
+```
+And for lower ionic strength (0.001)
+```{r eval=FALSE}
+
+for (i in phages_chunks) {
+  for (j in seq_along(get(i))) {
+# #aa<-as.character(read.fasta(paste0(wd, '/t7_genome_parts_string/', i), as.string = T, set.attributes = F))
+# #print(substr(aa, nchar(aa)-1000-10, nchar(aa)-1000+1))
+  system(paste0('cd /home/mikhail/Documents/t7/t7_rmd/sist/
+                ',
+                'perl -X master.pl -a M -i 0.001 -f /home/mikhail/Documents/t7/phages_by_10kbp_chunks/', i, '_', j, ' -o /home/mikhail/Documents/t7/phages_by_10kbp_sidd_ionic_0.001/Perl_sist_output_', i, 'no_', j, '.tsv'))
+  }
+}
+
+
+for (i in phages_chunks) {
+  interm<-c()
+    for (j in seq_along(get(i))) {
+      if (j==1) {
+      touch<-read.csv(paste0('/home/mikhail/Documents/t7/phages_by_10kbp_sidd_ionic_0.001/Perl_sist_output_', i, 'no_', j, '.tsv'), sep = '\t', skip = 1)
+      touch<-touch[-(9001:10000),]
+      }
+  else if (j==length(get(i))){
+    touch<-read.csv(paste0('/home/mikhail/Documents/t7/phages_by_10kbp_sidd_ionic_0.001/Perl_sist_output_', i, 'no_', j, '.tsv'), sep = '\t')
+    touch<-touch[-(1:1000),]
+    }
+  else{
+    touch<-read.csv(paste0('/home/mikhail/Documents/t7/phages_by_10kbp_sidd_ionic_0.001/Perl_sist_output_', i, 'no_', j, '.tsv'),sep = '\t', skip=1)
+    touch<-touch[-c(1:1000, 9001:10000),]
+    } #warnings omitting
+    interm<-rbind(interm, as.matrix(touch))
+    
+    } 
+assign(paste0(i, '_sidd_0.001'), interm)
+}
+  
+  
+#SP6
+
+```
+
+
+```{r Plot SIDD for complete phages DNA}
+par(mfrow=c(2,2))
+
+phages_sidds<-sort(grep(pattern = '*gbchunks_sidd', ls(), value = T))
+
+
+#phiOLs_coords<-c(405, NA, 377, 386)
+
+#phiORs_coords<-c(39229, NA, 37443, 38808)
+
+
+
+
+image(as.DNAbin(rbind(phiols_seqs[,250:350], phiors_seqs[,250:350])))
+
+#library(DECIPHER)
+#aligned_phiols <- AlignSeqs(DNAStringSet(phiols_seqs))
+#aligned_phiors <- AlignSeqs(DNAStringSet(phiors_seqs))
+
+#BrowseSeqs(aligned_phiors, highlight=1)
+
+for (i in seq_along(phages_sidds)){
+  plot(get(phages_sidds[i])[,2], type='l', ylim=c(0,1), main=paste0('SIDD profile for complete ', ' ',  toupper(phages[i]), ' ', ' DNA'), ylab='Opening probability', xlab='Sequence (nts)', lwd=1.5)
+  abline(h=0.5, col='grey', lty=3)
+  abline(v=c(phiOLs_coords[i], phiORs_coords[i]), col='red')
+}
+
+#rbPal <- colorRampPalette(c('lightgrey','firebrick'))
+
+#This adds a column of color values
+# based on the y values
+#molten_col <- rbPal(10)[as.numeric(cut(t7gbchunks_sidd[,2],breaks = 10))]
+
+
+plot( t7gbchunks_sidd[,2], type='l', ylim=c(0,1), main='SIDD profile for complete T7 DNA', ylab='Opening probability', xlab='Sequence (nts)', lwd=1.5)
+#abline(v=promoters_SP6$TSS[classIII])
+col_3_classes_t7<-rep(NA, length(promoters$Name))
+
+col_3_classes_t7[early]<-'salmon'
+col_3_classes_t7[classII]<-'darkgreen'
+col_3_classes_t7[classIII]<-'navy'
+
+arrows(x0 = promoters$TSS-1000, x1 = promoters$TSS, y0 = t7gbchunks_sidd[,2][promoters$TSS]+0.5, y1 = t7gbchunks_sidd[,2][promoters$TSS], col = col_3_classes_t7, angle =2 )
+
+text(labels = promoters$Name, x = promoters$TSS-1000, y = t7gbchunks_sidd[,2][promoters$TSS]+0.5, col = col_3_classes_t7, cex=0.7, srt=45)
+
+plot(sp6gbchunks_sidd[,2], type='l', ylim=c(0,1), main='SIDD profile for complete sp6 DNA', ylab='Opening probability', xlab='Sequence (nts)', lwd=1.5)
+#abline(v=promoters_SP6$TSS[classIII])
+
+col_3_classes_sp6<-rep(NA, length(promoters_SP6$Name))
+
+#col_3_classes_sp6[early]<-'salmon'
+col_3_classes_sp6[1:7]<-'darkgreen'
+col_3_classes_sp6[8:10]<-'navy'
+
+arrows(x0 = promoters_SP6$TSS-1000, x1 = promoters_SP6$TSS, y0 = t7gbchunks_sidd[,2][promoters_SP6$TSS]+0.5, y1 = t7gbchunks_sidd[,2][promoters_SP6$TSS], col = col_3_classes_sp6, angle =2 )
+
+text(labels = promoters_SP6$Name, x = promoters_SP6$TSS-1000, y = t7gbchunks_sidd[,2][promoters_SP6$TSS]+0.5, col = col_3_classes_sp6, cex=0.7, srt=45)
+
+```
+
+```{r `Finding molten intervals (P>=0.5)`}
+# function to split vector
+splitAt <- function(x, pos) unname(split(x, cumsum(seq_along(x) %in% pos)))
+
+t7_opened_part<-seq_along(t7gbchunks_sidd[,2])[t7gbchunks_sidd[,2]>=0.5]
+t7_opened_regions<-splitAt(t7_opened_part, which(diff(t7_opened_part)!=1))
+#sapply(t7_opened_regions, length)
+
+sp6_opened_part<-seq_along(sp6gbchunks_sidd[,2])[sp6gbchunks_sidd[,2]>=0.5]
+sp6_opened_regions<-splitAt(sp6_opened_part, which(diff(sp6_opened_part)!=1))
+
+boxplot(sapply(sp6_opened_regions, length), sapply(t7_opened_regions, length))
+
+
+
+```
+#OS data for T7 and SP6
+
+```{r OS data for T7 and SP6}
+sp6dynchars<-dynchars(sp6gb, 11) #sequences from Genbank
+t7dynchars<-dynchars(t7gb, 11)
+
+full_ae_t7_forw<-c()
+full_size_t7_forw<-c()
+full_gc200_t7_forw<-c()
+
+for (i in seq_along(promoters$TSS)) {
+  full_ae_t7_forw<-rbind(full_ae_t7_forw, t7dynchars$E01[(promoters$TSS[i]-150):(promoters$TSS[i]+50)])
+  full_size_t7_forw<-rbind(full_size_t7_forw, t7dynchars$d1[(promoters$TSS[i]-150):(promoters$TSS[i]+50)])
+  full_gc200_t7_forw<-rbind(full_gc200_t7_forw, sp6dynchars$gc[(promoters$TSS[i]-150):(promoters$TSS[i]+50)])
+}
+
+full_ae_sp6_forw<-c()
+full_size_sp6_forw<-c()
+full_gc200_sp6_forw<-c()
+
+for (i in seq_along(promoters_SP6$TSS)) {
+  full_ae_sp6_forw<-rbind(full_ae_sp6_forw, sp6dynchars$E01[(promoters_SP6$TSS[i]-150):(promoters_SP6$TSS[i]+50)])
+  full_size_sp6_forw<-rbind(full_size_sp6_forw, sp6dynchars$d1[(promoters_SP6$TSS[i]-150):(promoters_SP6$TSS[i]+50)])
+  full_gc200_sp6_forw<-rbind(full_gc200_sp6_forw, sp6dynchars$gc[(promoters_SP6$TSS[i]-150):(promoters_SP6$TSS[i]+50)])
+}
+XX<-(-150:50)
+
+plot(XX,full_ae_t7_forw[1,], type='n',  ylim=range(full_ae_t7_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for early promoters', panel.first=c(rect(-17, min(full_ae_t7_forw)-10, -5, max(full_ae_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_t7_forw)-10, 5, max(full_ae_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in early) {
+  lines(XX, full_ae_t7_forw[i,], type='l', lwd=1 , col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+legend('bottomleft', as.character(promoters$Name[early]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_t7_forw))[early]), border = F, bg = "white")
+
+
+plot(XX, full_ae_t7_forw[1,], type='n',   ylim=range(full_ae_t7_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for class II promoters', panel.first=c(rect(-17, min(full_ae_t7_forw)-10, -5, max(full_ae_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_t7_forw)-10, 5, max(full_ae_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in classII) {
+  lines(XX, full_ae_t7_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+#legend('bottomleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_t7_forw))[classII]), border = F, bg = "white")
+
+
+plot(XX, full_ae_t7_forw[1,], type='n',  ylim=range(full_ae_t7_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for class III promoters',  panel.first=c(rect(-17, min(full_ae_t7_forw)-10, -5, max(full_ae_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_t7_forw)-10, 5, max(full_ae_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in classIII) {
+  lines(XX, full_ae_t7_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+#legend('bottomleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_t7_forw))[classIII]), border = F, bg = "white")
+
+
+plot(XX, full_ae_sp6_forw[1,], type='n',   ylim=range(full_ae_sp6_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for SP6 metabolic promoters', panel.first=c(rect(-17, min(full_ae_sp6_forw)-10, -5, max(full_ae_sp6_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_sp6_forw)-10, 5, max(full_ae_sp6_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in 1:7) {
+  lines(XX, full_ae_sp6_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+#legend('bottomleft', as.character(promoters_SP6$Name[1:7]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_sp6_forw))[1:7]), border = F, bg = "white")
+
+
+plot(XX, full_ae_sp6_forw[1,], type='n',  ylim=range(full_ae_sp6_forw), xlab='Sequence', ylab='Activation energy', main='AE profiles for SP6 structural promoters', , panel.first=c(rect(-17, min(full_ae_sp6_forw)-10, -5, max(full_ae_sp6_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_ae_sp6_forw)-10, 5, max(full_ae_sp6_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in 8:10) {
+  lines(XX, full_ae_sp6_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+#legend('bottomleft', as.character(promoters$Name[8:10]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_ae_sp6_forw))[8:10]), border = F, bg = "white")
+
+
+
+
+#gc200
+
+plot(XX, full_gc200_t7_forw[1,], type='n',   ylim=range(full_gc200_t7_forw), xlab='Sequence', ylab='Activation energy', main='gc200 profiles for class II promoters', panel.first=c(rect(-17, min(full_gc200_t7_forw)-10, -5, max(full_gc200_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_gc200_t7_forw)-10, 5, max(full_gc200_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in classII) {
+  lines(XX, full_gc200_t7_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+#legend('bottomleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_gc200_t7_forw))[classII]), border = F, bg = "white")
+
+
+plot(XX, full_gc200_t7_forw[1,], type='n',  ylim=range(full_gc200_t7_forw), xlab='Sequence', ylab='Activation energy', main='gc200 profiles for class III promoters', , panel.first=c(rect(-17, min(full_gc200_t7_forw)-10, -5, max(full_gc200_t7_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_gc200_t7_forw)-10, 5, max(full_gc200_t7_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in classIII) {
+  lines(XX, full_gc200_t7_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+#legend('bottomleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_gc200_t7_forw))[classIII]), border = F, bg = "white")
+
+
+plot(XX, full_gc200_sp6_forw[1,], type='n',   ylim=range(full_gc200_sp6_forw), xlab='Sequence', ylab='Activation energy', main='gc200 profiles for SP6 metabolic promoters', panel.first=c(rect(-17, min(full_gc200_sp6_forw)-10, -5, max(full_gc200_sp6_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_gc200_sp6_forw)-10, 5, max(full_gc200_sp6_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in 1:7) {
+  lines(XX, full_gc200_sp6_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+#legend('bottomleft', as.character(promoters_SP6$Name[1:7]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_gc200_sp6_forw))[1:7]), border = F, bg = "white")
+
+
+plot(XX, full_gc200_sp6_forw[1,], type='n',  ylim=range(full_gc200_sp6_forw), xlab='Sequence', ylab='Activation energy', main='gc200 profiles for SP6 structural promoters', , panel.first=c(rect(-17, min(full_gc200_sp6_forw)-10, -5, max(full_gc200_sp6_forw)+10, col = 'lightblue', border=F), rect(-5, min(full_gc200_sp6_forw)-10, 5, max(full_gc200_sp6_forw)+10, col = 'pink', border=F)))
+abline(v=0, lty=2)
+for (i in 8:10) {
+  lines(XX, full_gc200_sp6_forw[i,], type='l', lwd=1, col=col_all[i])
+}
+abline(v=-17, lty=3, col='red')
+abline(v=5, lty=3, col='red')
+#legend('bottomleft', as.character(promoters$Name[8:10]), cex =0.5, lty = c(1,1), lwd=1,  col =c(rainbow(nrow(full_gc200_sp6_forw))[8:10]), border = F, bg = "white")
+
+
+```
+
+Assorte SP6 promoters
+
+```{r}
+
+par(mfrow=c(2,1))
+
+plot(X201, mpots_sp6[1,(150-100):(150+100)], type='n', ylim=range(mpots_sp6), lwd=0.01, main='Electrostatic potential profiles\n for SP6 promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in c(1,6,9)){
+  lines(X201, mpots_sp6[i,(150-100):(150+100)], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters_SP6$Name[metabolic]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[c(1,6,9)], border = F, bg = "white")
+
+plot(X201, mpots_sp6[1,(150-100):(150+100)], type='n', ylim=range(mpots_sp6), lwd=0.01, main='Electrostatic potential profiles\n for SP6 promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in c(2,4,5,8)){
+  lines(X201, mpots_sp6[i,(150-100):(150+100)], type='l', lwd=1, col=col_all[i])
+}
+legend('topleft', as.character(promoters_SP6$Name[structural]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[c(2,4,5,8)], border = F, bg = "white")
+
+```
+Textual distances analysis using _ape_
+
+```{r}
+raw_dist_t7<-dist.dna(as.DNAbin(chars_to_mpots_t7[-c(early, 1, 23),]), model = 'raw', as.matrix = T)
+rownames(raw_dist_t7)<-promoters$Name[-c(early, 1, 23)]
+
+hclust_raw_dist_t7<-hclust.vector(raw_dist_t7, method='ward')
+
+color_hclust_dist_t7<-color_branches(as.dendrogram(hclust_raw_dist_t7), k=nrow(bends_t7_to_clust), col =  c(rep('cadetblue', 7), rep('coral4', 6))[order.dendrogram(as.dendrogram(hclust_raw_dist_t7))])
+
+raw_dist_sp6<-dist.dna(as.DNAbin(chars_to_mpots_sp6), model = 'raw', as.matrix = T)
+rownames(raw_dist_sp6)<-promoters_SP6$Name
+
+hclust_raw_dist_sp6<-hclust.vector(raw_dist_sp6, method='ward')
+
+color_hclust_dist_sp6<-color_branches(as.dendrogram(hclust_raw_dist_sp6), k=nrow(bends_sp6_to_clust), col =  c(rep('cadetblue', 7), rep('coral4', 6))[order.dendrogram(as.dendrogram(hclust_raw_dist_sp6))])
+
+color_hclust_dist_t7%>%set('branches_lwd', 4)%>%plot
+color_hclust_dist_sp%>%set('branches_lwd', 4)6%>%plot
+
+tanglegram(color_hclust_mpots_t7, color_hclust_dist_t7, sort = T, intersecting = T , color_lines = (topo.colors(13)), main_left = 'EP clusterization', main_right =  'Raw distance clusterization')
+mtext('T7 promoters:metabolic in blue, structral in red', 3, 2,2)
+
+untangle(tanglegram(color_hclust_mpots_t7, color_hclust_dist_t7, sort = T, intersecting = T ), color_lines = (topo.colors(13)), main_left = 'EP clusterization', main_right =  'Bendability clusterization')%>%plot
+
+tanglegram(color_hclust_bends_t7, color_hclust_dist_t7, sort = T, intersecting = T , color_lines = (topo.colors(13)), main_left = 'Bendability clusterization', main_right =  'Raw distance clusterization')
+mtext('T7 promoters:metabolic in blue, structral in red', 3, 2,2)
+
+untangle(tanglegram(color_hclust_bends_t7, color_hclust_dist_t7, sort = T, intersecting = T ), color_lines = (topo.colors(13)), main_left = 'EP clusterization', main_right =  'Bendability clusterization')%>%plot
+```
+
+
+
+Plotting complete profiles sets with shaded areas
+
+```{r}
+
+
+mpots_t7_to_clust<-mpots_t7[c(classII, classIII),1:201]
+mpots_sp6_to_clust <- mpots_sp6[,1:201]
+bends_t7_to_clust<-t(bend_proms_t7)[c(classII, classIII),]
+bends_sp6_to_clust <- t(bend_proms_sp6)
+
+par(mfrow=c(2,2))
+
+X<--150:50
+plot(X, mpots_t7_to_clust[1,], type='n', ylim=range(mpots_t7), lwd=0.01, main='Electrostatic potential profiles\n for T7 native promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in 1:nrow(mpots_t7_to_clust)){
+  lines(X, mpots_t7_to_clust[i,], type='l', lwd=0.0001, col='white')
+  polygon(c(X, rev(X)), c(mpots_t7_to_clust[1,], rev(mpots_t7_to_clust[i,])),
+     col = "salmon1", border = NA)
+}
+
+plot(X, mpots_sp6_to_clust[1,], type='n', ylim=range(mpots_sp6), lwd=0.01, main='Electrostatic potential profiles\n for sp6 native promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in 1:nrow(mpots_sp6_to_clust)){
+  lines(X, mpots_sp6_to_clust[i,], type='l', lwd=0.0001, col=1)
+  polygon(c(X, rev(X)), c(mpots_sp6_to_clust[1,], rev(mpots_sp6_to_clust[i,])),
+     col = "steelblue1", border = NA)
+}
+
+
+#bends
+
+#par(mfrow=c(2,1))
+plot(X, bends_t7_to_clust[1,], type='l', ylim=range(bends_t7_to_clust), lwd=1, col='salmon4', main='Bendability profiles\n for T7 native promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in 1:nrow(bends_t7_to_clust)){
+  lines(X, bends_t7_to_clust[i,], type='l', lwd=0.0001, col='white')
+  polygon(c(X, rev(X)), c(bends_t7_to_clust[1,], rev(bends_t7_to_clust[i,])),
+     col = "salmon1", border = NA)
+}
+
+plot(X, bends_sp6_to_clust[1,], type='l', ylim=range(bends_sp6_to_clust), lwd=1, col='salmon4', main='Bendability profiles\n for sp6 native promoters', xlab='Sequence (nts)', ylab='EP value')
+abline(v=0, lty=2)
+for (i in 1:nrow(bends_sp6_to_clust)){
+  lines(X, bends_sp6_to_clust[i,], type='l', lwd=0.0001, col=1)
+  polygon(c(X, rev(X)), c(bends_sp6_to_clust[1,], rev(bends_sp6_to_clust[i,])),
+     col = "steelblue1", border = NA)
+}
+
+```
+DNA distances for mixture of 2 phages promoters
+
+```{r}
+raw_dist_t7_sp6<-dist.dna(as.DNAbin(
+  rbind(chars_to_mpots_t7[-c(early, 1, 23),], chars_to_mpots_sp6)), 
+  model = 'raw', pairwise.deletion = T, as.matrix = T)
+rownames(raw_dist_t7_sp6)<-c(as.character(promoters$Name)[-c(early, 1, 23)],
+                            promoters_SP6$Name)
+
+hclust_raw_dist_t7_sp6<-hclust.vector(raw_dist_t7_sp6, method='ward')
+
+color_hclust_raw_dist_t7_sp6<-color_branches(as.dendrogram(hclust_raw_dist_t7_sp6), k=nrow(raw_dist_t7_sp6), col =  c(rep('cadetblue', 7), rep('navy', 6), rep('salmon4', 7), rep('darkred', 3))[order.dendrogram(as.dendrogram(hclust_raw_dist_t7_sp6))])
+
+color_hclust_raw_dist_t7_sp6%>%plot(main="Raw DNA distances clustering for T7 and SP6 promoters sequences")
+```
+
+
+```{r GC by codons spread calculation}
+
+
+GC_spread <- function (seq) {
+  library(zoo)
+  library(seqinr)
+  return(range(GC1(seq), GC2(seq), GC3(seq))[1]-range(GC1(seq), GC2(seq), GC3(seq))[2])
+}
+
+
+rollGCspread<-function (seq, interval) {
+  library(zoo)
+  library(seqinr)
+  
+  #GC_spread <- function (seq) {
+   # return(range(GC1(seq), GC2(seq), GC3(seq))[1]-range(GC1(seq), GC2(seq), GC3(seq))[2])
+  #}
+  
+  return(rollapply(seq, interval, GC_spread))
+}
+
+rollgc_full_t7 <- rollGCspread(t7gb, 22)
+
+
+rollgcs_t7<-c()
+for(i in promoters$TSS) {
+  rollgcs_t7<-rbind(rollgcs_t7, rollgc_full_t7[(i-150):(i+50)])
+}
+
+
+
+```
+
+#SIDD calculation using SIST by C. Benham - for different solution parameters
+Needed DNA phragments are loaded and `perl` script from [Benham lab BitBucket](https://bitbucket.org/benhamlab/sist_codes) was used to calculate SIDD profiles for temperature 310K; sigma = 0.06; theta = 12; salt = 0.001 (not 0.01!!) for linear form of DNA molecule.
+Order of output files is fixed.
+```{r}
+
+
+dir_parts_string<-dir('/home/mikhail/Documents/t7/t7_rmd/t7_genome_parts_string')
+dir_parts_string<-mixedsort(dir_parts_string)
+
+for (i in dir_parts_string){
+# #aa<-as.character(read.fasta(paste0(wd, '/t7_genome_parts_string/', i), as.string = T, set.attributes = F))
+# #print(substr(aa, nchar(aa)-1000-10, nchar(aa)-1000+1))
+  system(paste0('cd /home/mikhail/Documents/t7/t7_rmd/sist/
+                ', 
+                'perl -X master.pl -a M -i 0.001 -f /home/mikhail/Documents/t7/t7_rmd/t7_genome_parts_string/', i, ' -o /home/mikhail/Documents/t7/t7_rmd/Perl_sist_output_ionic_0.001/', i, '.tsv'))
+}
+
+dir_sist<-dir('/home/mikhail/Documents/t7/t7_rmd/Perl_sist_output_ionic_0.001/')
+dir_sist<-mixedsort(dir_sist)
+```
+The resulting data are loaded and plotted.
+
+```{r}
+
+full_g_sist<-c()
+full_p_sist_t7<-c()
+full_pos_sist<-c()
+
+#since output files for sequences shorter than 2001 b.p. contain warning (that says so) at the first line the warning needs to be removed by skipping not 1 but 2 first rows.
+for (i in 1:length(dir_sist)) {
+   p<-read.table(paste0('/home/mikhail/Documents/t7/t7_rmd/Perl_sist_output_ionic_0.001/', dir_sist[i]), skip=1, sep='\t', header=F, col.names = c('pos','P.x.', 'G.x.'))
+   p2<-p[,2:3]
+   if(p2[1,1]=='P(x)'){
+   p2<-p2[-1,]
+   }
+  deltag<-as.numeric(as.vector(p2$G.x.))
+  #print(max(deltag))
+  prob<-as.numeric(as.vector(p2$P.x.))
+  #pos<-as.numeric(p$pos)   
+  print(max(prob))
+   
+  if(promoters$TSS[i]<1001) {
+
+    full_g_sist<-rbind(c(rep(NA, abs(length(deltag)-2001)), deltag), 
+                                                                    full_g_sist)
+    full_p_sist_t7<-rbind(c(rep(NA, abs(length(prob)-2001)), prob), 
+                                                                    full_p_sist_t7)
+    #full_pos_sist<-rbind(c(rep(NA, abs(length(pos)-2001)), pos),
+    #                                                                full_pos_sist)
+
+  } else 
+    if(promoters$TSS[i]>nchar(t7_genome_string)-1000) {
+  
+     full_g_sist<-rbind(c(deltag, rep(NA, abs(length(deltag)-2001))), 
+                                                                    full_g_sist)
+     full_p_sist_t7<-rbind(c(prob, rep(NA, abs(length(prob)-2001))), 
+                                                                    full_p_sist_t7)
+     #full_pos_sist<-rbind(c(pos, rep(NA, abs(length(pos)-2001))), 
+     #                                                               full_pos_sist)
+     #print(length(c(rep(NA, abs(length(p$pos)-2001)), p$pos)))
+    } else {
+    full_g_sist<-rbind(full_g_sist, deltag)
+    full_p_sist_t7<-rbind(full_p_sist_t7, prob)
+   # full_pos_sist<-rbind(full_pos_sist, pos)
+
+    } 
+  }
+
+```
+#Plotting results for _P_ value
+```{r}
+X750<--500:250
+X750_plot<-500:1250
+
+plot(X750,full_p_sist_t7[1, X750_plot], type='n', lwd=0.001, ylim=c(0, 1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for early promoters')
+abline(v=0, lty=2)
+for (i in early) {
+  lines(X750, full_p_sist_t7[i,X750_plot], type='l', lwd=1 , col=col_all[i])
+}
+legend('bottomleft', as.character(promoters$Name[early]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[early], border = F, bg = "white")
+
+
+plot(X750, full_p_sist_t7[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for class II promoters')
+abline(v=0, lty=2)
+for (i in classII) {
+  lines(X750, full_p_sist_t7[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters$Name[classII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classII], border = F, bg = "white")
+
+
+plot(X750, full_p_sist_t7[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability',  main='SIDD profiles for class III promoters')
+abline(v=0, lty=2)
+for (i in classIII) {
+  lines(X750, full_p_sist_t7[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters$Name[classIII]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[classIII], border = F, bg = "white")
+```
+
+And for SP6 
+
+```{r}
+
+# #setwd(paste0(wd, '/sist/'))
+dir_parts_string<-dir('/home/mikhail/Documents/t7/SP6_all_promoter_variants/sp6_genome_parts_string/')
+dir_parts_string<-mixedsort(dir_parts_string)
+
+for (i in dir_parts_string){
+# #aa<-as.character(read.fasta(paste0(wd, '/t7_genome_parts_string/', i), as.string = T, set.attributes = F))
+# #print(substr(aa, nchar(aa)-1000-10, nchar(aa)-1000+1))
+  system(paste0( 'cd /home/mikhail/Documents/t7/t7_rmd/sist/
+                ', 'perl -X master.pl -a M -f /home/mikhail/Documents/t7/SP6_all_promoter_variants/sp6_genome_parts_string/', i, ' -o /home/mikhail/Documents/t7/SP6_all_promoter_variants/Perl_sist_output_ionic_0.001/', i, '.tsv'))
+}
+
+dir_sist<-dir('/home/mikhail/Documents/t7/SP6_all_promoter_variants/Perl_sist_output_ionic_0.001/')
+dir_sist<-mixedsort(dir_sist)
+```
+The resulting data are loaded and plotted.
+
+```{r}
+
+full_g_sist<-c()
+full_p_sist_sp6<-c()
+full_pos_sist<-c()
+
+#since output files for sequences shorter than 2001 b.p. contain warning (that says so) at the first line the warning needs to be removed by skipping not 1 but 2 first rows.
+for (i in 1:length(dir_sist)) {
+   p<-read.table(paste0('/home/mikhail/Documents/t7/SP6_all_promoter_variants/Perl_sist_output_ionic_0.001/', dir_sist[i]), skip=1, sep='\t', header=F, col.names = c('pos','P.x.', 'G.x.'))
+   p2<-p[,2:3]
+   if(p2[1,1]=='P(x)'){
+   p2<-p2[-1,]
+   }
+  deltag<-as.numeric(p2$G.x.)
+  print(max(deltag))
+  prob<-as.numeric(p2$P.x.)
+  #pos<-as.numeric(p$pos)   
+   
+  if(promoters_SP6$TSS[i]<1001) {
+
+    #full_g_sist<-rbind(c(rep(NA, abs(length(deltag)-2001)), deltag), 
+     #                                                               full_g_sist)
+    full_p_sist_sp6<-rbind(c(rep(NA, abs(length(prob)-2001)), prob), 
+                                                                    full_p_sist_sp6)
+    #full_pos_sist<-rbind(c(rep(NA, abs(length(pos)-2001)), pos),
+    #                                                                full_pos_sist)
+
+  } else 
+    if(promoters_SP6$TSS[i]>nchar(t7_genome_string)-1000) {
+  
+     #full_g_sist<-rbind(c(deltag, rep(NA, abs(length(deltag)-2001))), 
+      #                                                              full_g_sist)
+     full_p_sist_sp6<-rbind(c(prob, rep(NA, abs(length(prob)-2001))), 
+                                                                    full_p_sist_sp6)
+     #full_pos_sist<-rbind(c(pos, rep(NA, abs(length(pos)-2001))), 
+     #                                                               full_pos_sist)
+     #print(length(c(rep(NA, abs(length(p$pos)-2001)), p$pos)))
+    } else {
+    full_g_sist<-rbind(full_g_sist, deltag)
+    full_p_sist_sp6<-rbind(full_p_sist_sp6, prob)
+   # full_pos_sist<-rbind(full_pos_sist, pos)
+
+  } 
+}
+
+```
+#Plotting results for _P_ value
+```{r}
+X750_plot<-500:1250
+#svg('/home/mikhail/Documents/t7/SP6_all_promoter_variants/sp6_promoters_sist_sidd.svg')
+par(mfrow=c(2,1))
+plot(X750,full_p_sist_sp6[1, X750_plot], type='n', lwd=0.001, ylim=c(0, 1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for SP6 metabolic promoters')
+abline(v=0, lty=2)
+for (i in metabolic) {
+  lines(X750, full_p_sist_sp6[i,X750_plot], type='l', lwd=1 , col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[metabolic]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[metabolic], border = F, bg = "white")
+
+
+plot(X750, full_p_sist_sp6[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for SP6 structural promoters')
+abline(v=0, lty=2)
+for (i in structural) {
+  lines(X750, full_p_sist_sp6[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[structural]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[structural], border = F, bg = "white")
+dev.off()
+
+plot(X750, full_p_sist_sp6[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability',  main='SIDD profiles for all promoters')
+abline(v=0, lty=2)
+for (i in c(metabolic, structural)) {
+  lines(X750, full_p_sist_sp6[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[c(metabolic, structural)]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[c(metabolic, structural)], border = F, bg = "white")
+```
+
+
+#Plotting results for _P_ value (complete plasmid)
+```{r}
+
+svg('/home/mikhail/Documents/t7/SP6_all_promoter_variants/sp6_promoters_sist_sidd_full_plasmid.svg')
+par(mfrow=c(2,1))
+plot(full_p_sist_sp6[1,], type='n', lwd=0.001, ylim=c(0, 1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for SP6 metabolic promoters')
+abline(v=0, lty=2)
+for (i in metabolic) {
+  lines(full_p_sist_sp6[i,], type='l', lwd=1 , col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[metabolic]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[metabolic], border = F, bg = "white")
+
+
+plot(full_p_sist_sp6[1,], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability', main='SIDD profiles for SP6 structural promoters')
+abline(v=0, lty=2)
+for (i in structural) {
+  lines(full_p_sist_sp6[i,], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[structural]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[structural], border = F, bg = "white")
+dev.off()
+
+plot(X750, full_p_sist_sp6[1,X750_plot], type='n', lwd=0.001, ylim=c(0,1), xlab='Sequence', ylab='Opening probability',  main='SIDD profiles for all promoters')
+abline(v=0, lty=2)
+for (i in c(metabolic, structural)) {
+  lines(X750, full_p_sist_sp6[i,X750_plot], type='l', lwd=1, col=col_all[i])
+}
+legend('bottomleft', as.character(promoters_SP6$Name[c(metabolic, structural)]), cex =0.5, lty = c(1,1), lwd=1,  col =col_all[c(metabolic, structural)], border = F, bg = "white")
+```
+
+#Session information
+
+```{r}
+sessionInfo()
+```
+
+```{r}
+
+
+
+```
